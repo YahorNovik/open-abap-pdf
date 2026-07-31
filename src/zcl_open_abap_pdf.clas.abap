@@ -29,7 +29,14 @@ CLASS zcl_open_abap_pdf DEFINITION PUBLIC.
     CONSTANTS:
       c_pt_per_mm     TYPE f VALUE '2.83465',
       c_a4_width      TYPE f VALUE '595.28',  " 210mm in points
-      c_a4_height     TYPE f VALUE '841.89'.  " 297mm in points
+      c_a4_height     TYPE f VALUE '841.89',  " 297mm in points
+      c_letter_width  TYPE f VALUE '612',
+      c_letter_height TYPE f VALUE '792'.
+
+    CONSTANTS:
+      c_align_left   TYPE string VALUE 'L',
+      c_align_center TYPE string VALUE 'C',
+      c_align_right  TYPE string VALUE 'R'.
 
     "! Create a new PDF document
     CLASS-METHODS create
@@ -130,6 +137,109 @@ CLASS zcl_open_abap_pdf DEFINITION PUBLIC.
     METHODS get_page_height
       RETURNING VALUE(rv_height) TYPE f.
 
+    "! Width of a text in points, using the current or the given font
+    METHODS get_text_width
+      IMPORTING iv_text         TYPE string
+                iv_font         TYPE string OPTIONAL
+                iv_size         TYPE f DEFAULT 0
+      RETURNING VALUE(rv_width) TYPE f.
+
+    "! Set the page margins in points
+    METHODS set_margins
+      IMPORTING iv_left       TYPE f DEFAULT '28.35'
+                iv_top        TYPE f DEFAULT '28.35'
+                iv_right      TYPE f DEFAULT '28.35'
+                iv_bottom     TYPE f DEFAULT '28.35'
+      RETURNING VALUE(ro_pdf) TYPE REF TO zcl_open_abap_pdf.
+
+    "! Switch the automatic page break on or off
+    "! @parameter iv_margin | Distance from the bottom of the page that triggers a break
+    METHODS set_auto_page_break
+      IMPORTING iv_active     TYPE abap_bool DEFAULT abap_true
+                iv_margin     TYPE f DEFAULT '42.52'
+      RETURNING VALUE(ro_pdf) TYPE REF TO zcl_open_abap_pdf.
+
+    "! Register header and footer callbacks
+    METHODS set_layout
+      IMPORTING io_layout     TYPE REF TO zif_open_abap_pdf_layout
+      RETURNING VALUE(ro_pdf) TYPE REF TO zcl_open_abap_pdf.
+
+    "! Placeholder that is replaced by the total number of pages while rendering
+    METHODS set_alias_nb_pages
+      IMPORTING iv_alias      TYPE string DEFAULT '{nb}'
+      RETURNING VALUE(ro_pdf) TYPE REF TO zcl_open_abap_pdf.
+
+    "! Default height of a text line, used by cell and multi_cell
+    METHODS set_line_height
+      IMPORTING iv_height     TYPE f DEFAULT 14
+      RETURNING VALUE(ro_pdf) TYPE REF TO zcl_open_abap_pdf.
+
+    "! Move the cursor to the given position, measured from the top left corner
+    METHODS set_xy
+      IMPORTING iv_x          TYPE f
+                iv_y          TYPE f
+      RETURNING VALUE(ro_pdf) TYPE REF TO zcl_open_abap_pdf.
+
+    METHODS set_x
+      IMPORTING iv_x          TYPE f
+      RETURNING VALUE(ro_pdf) TYPE REF TO zcl_open_abap_pdf.
+
+    METHODS set_y
+      IMPORTING iv_y          TYPE f
+      RETURNING VALUE(ro_pdf) TYPE REF TO zcl_open_abap_pdf.
+
+    METHODS get_x
+      RETURNING VALUE(rv_x) TYPE f.
+
+    METHODS get_y
+      RETURNING VALUE(rv_y) TYPE f.
+
+    "! Move the cursor down and back to the left margin
+    METHODS ln
+      IMPORTING iv_height     TYPE f DEFAULT 0
+      RETURNING VALUE(ro_pdf) TYPE REF TO zcl_open_abap_pdf.
+
+    "! Width between the left and the right margin
+    METHODS get_content_width
+      RETURNING VALUE(rv_width) TYPE f.
+
+    "! Number of the page that is currently being written
+    METHODS get_page_number
+      RETURNING VALUE(rv_number) TYPE i.
+
+    "! Write a single line text box at the cursor and advance the cursor
+    "! @parameter iv_width | Box width, 0 means up to the right margin
+    "! @parameter iv_align | L, C or R
+    "! @parameter iv_border | Any combination of L, T, R, B or 1 for all sides
+    "! @parameter iv_fill | Fill the box with the current fill color
+    "! @parameter iv_ln | abap_true moves the cursor to the next line, else to the right
+    METHODS cell
+      IMPORTING iv_text       TYPE string
+                iv_width      TYPE f DEFAULT 0
+                iv_height     TYPE f DEFAULT 0
+                iv_align      TYPE string DEFAULT 'L'
+                iv_border     TYPE string DEFAULT ''
+                iv_fill       TYPE abap_bool DEFAULT abap_false
+                iv_ln         TYPE abap_bool DEFAULT abap_true
+                iv_padding    TYPE f DEFAULT 2
+      RETURNING VALUE(ro_pdf) TYPE REF TO zcl_open_abap_pdf.
+
+    "! Write a wrapped text block, breaking pages when needed
+    METHODS multi_cell
+      IMPORTING iv_text       TYPE string
+                iv_width      TYPE f DEFAULT 0
+                iv_height     TYPE f DEFAULT 0
+                iv_align      TYPE string DEFAULT 'L'
+                iv_border     TYPE string DEFAULT ''
+                iv_fill       TYPE abap_bool DEFAULT abap_false
+                iv_padding    TYPE f DEFAULT 2
+      RETURNING VALUE(ro_pdf) TYPE REF TO zcl_open_abap_pdf.
+
+    "! Add a page break if iv_height does not fit on the current page
+    METHODS check_page_break
+      IMPORTING iv_height        TYPE f
+      RETURNING VALUE(rv_broken) TYPE abap_bool.
+
     "! Convert millimeters to points
     CLASS-METHODS mm_to_pt
       IMPORTING iv_mm        TYPE f
@@ -153,6 +263,18 @@ CLASS zcl_open_abap_pdf DEFINITION PUBLIC.
     DATA mv_draw_color TYPE string.
     DATA mv_fill_color TYPE string.
     DATA mv_line_width TYPE f.
+    DATA mv_margin_left TYPE f.
+    DATA mv_margin_top TYPE f.
+    DATA mv_margin_right TYPE f.
+    DATA mv_margin_bottom TYPE f.
+    DATA mv_x TYPE f.
+    DATA mv_y TYPE f.
+    DATA mv_line_height TYPE f.
+    DATA mv_auto_break TYPE abap_bool.
+    DATA mv_break_margin TYPE f.
+    DATA mv_nb_alias TYPE string.
+    DATA mo_layout TYPE REF TO zif_open_abap_pdf_layout.
+    DATA mv_in_layout TYPE abap_bool.
 
     METHODS add_object
       IMPORTING iv_content   TYPE string
@@ -187,6 +309,18 @@ CLASS zcl_open_abap_pdf DEFINITION PUBLIC.
 
     METHODS build_objects
       RETURNING VALUE(rv_catalog_id) TYPE i.
+
+    METHODS emit_page_state.
+
+    METHODS run_footer.
+
+    METHODS draw_cell_box
+      IMPORTING iv_x      TYPE f
+                iv_y      TYPE f
+                iv_width  TYPE f
+                iv_height TYPE f
+                iv_border TYPE string
+                iv_fill   TYPE abap_bool.
 ENDCLASS.
 
 CLASS zcl_open_abap_pdf IMPLEMENTATION.
@@ -200,9 +334,19 @@ CLASS zcl_open_abap_pdf IMPLEMENTATION.
     ro_pdf->mv_draw_color = '0 0 0 RG'.
     ro_pdf->mv_fill_color = '1 1 1 rg'.
     ro_pdf->mv_line_width = 1.
+    ro_pdf->mv_margin_left = 10 * c_pt_per_mm.
+    ro_pdf->mv_margin_top = 10 * c_pt_per_mm.
+    ro_pdf->mv_margin_right = 10 * c_pt_per_mm.
+    ro_pdf->mv_margin_bottom = 10 * c_pt_per_mm.
+    ro_pdf->mv_line_height = 14.
+    ro_pdf->mv_auto_break = abap_true.
+    ro_pdf->mv_break_margin = 15 * c_pt_per_mm.
+    ro_pdf->mv_nb_alias = '{nb}'.
   ENDMETHOD.
 
   METHOD add_page.
+    run_footer( ).
+
     mv_current_page = lines( mt_pages ) + 1.
     DATA(ls_page) = VALUE ty_page(
       id = mv_current_page
@@ -211,6 +355,256 @@ CLASS zcl_open_abap_pdf IMPLEMENTATION.
       content = '' ).
     APPEND ls_page TO mt_pages.
 
+    mv_x = mv_margin_left.
+    mv_y = mv_margin_top.
+
+    " Every page has its own content stream, so the graphics state is restated
+    emit_page_state( ).
+
+    IF mo_layout IS BOUND AND mv_in_layout = abap_false.
+      mv_in_layout = abap_true.
+      mo_layout->header( me ).
+      mv_in_layout = abap_false.
+    ENDIF.
+
+    ro_pdf = me.
+  ENDMETHOD.
+
+  METHOD emit_page_state.
+    ensure_font( mv_current_font ).
+    append_to_page( |/F{ get_font_id( mv_current_font ) } { format_number( mv_current_font_size ) } Tf| ).
+    append_to_page( mv_text_color ).
+    append_to_page( mv_draw_color ).
+    append_to_page( |{ format_number( mv_line_width ) } w| ).
+  ENDMETHOD.
+
+  METHOD run_footer.
+    IF mo_layout IS NOT BOUND OR mt_pages IS INITIAL OR mv_in_layout = abap_true.
+      RETURN.
+    ENDIF.
+
+    mv_in_layout = abap_true.
+    mo_layout->footer( me ).
+    mv_in_layout = abap_false.
+  ENDMETHOD.
+
+  METHOD set_margins.
+    mv_margin_left = iv_left.
+    mv_margin_top = iv_top.
+    mv_margin_right = iv_right.
+    mv_margin_bottom = iv_bottom.
+    ro_pdf = me.
+  ENDMETHOD.
+
+  METHOD set_auto_page_break.
+    mv_auto_break = iv_active.
+    mv_break_margin = iv_margin.
+    ro_pdf = me.
+  ENDMETHOD.
+
+  METHOD set_layout.
+    mo_layout = io_layout.
+    ro_pdf = me.
+  ENDMETHOD.
+
+  METHOD set_alias_nb_pages.
+    mv_nb_alias = iv_alias.
+    ro_pdf = me.
+  ENDMETHOD.
+
+  METHOD set_line_height.
+    mv_line_height = iv_height.
+    ro_pdf = me.
+  ENDMETHOD.
+
+  METHOD set_xy.
+    mv_x = iv_x.
+    mv_y = iv_y.
+    ro_pdf = me.
+  ENDMETHOD.
+
+  METHOD set_x.
+    mv_x = iv_x.
+    ro_pdf = me.
+  ENDMETHOD.
+
+  METHOD set_y.
+    mv_y = iv_y.
+    ro_pdf = me.
+  ENDMETHOD.
+
+  METHOD get_x.
+    rv_x = mv_x.
+  ENDMETHOD.
+
+  METHOD get_y.
+    rv_y = mv_y.
+  ENDMETHOD.
+
+  METHOD ln.
+    IF iv_height > 0.
+      mv_y = mv_y + iv_height.
+    ELSE.
+      mv_y = mv_y + mv_line_height.
+    ENDIF.
+    mv_x = mv_margin_left.
+    ro_pdf = me.
+  ENDMETHOD.
+
+  METHOD get_content_width.
+    rv_width = get_page_width( ) - mv_margin_left - mv_margin_right.
+  ENDMETHOD.
+
+  METHOD get_page_number.
+    rv_number = mv_current_page.
+  ENDMETHOD.
+
+  METHOD check_page_break.
+    IF mv_auto_break = abap_false OR mv_in_layout = abap_true OR mt_pages IS INITIAL.
+      RETURN.
+    ENDIF.
+
+    IF mv_y + iv_height <= get_page_height( ) - mv_break_margin.
+      RETURN.
+    ENDIF.
+
+    add_page( iv_width = get_page_width( ) iv_height = get_page_height( ) ).
+    rv_broken = abap_true.
+  ENDMETHOD.
+
+  METHOD draw_cell_box.
+    IF iv_fill = abap_true.
+      append_to_page( mv_fill_color ).
+      rect( iv_x = iv_x iv_y = iv_y iv_width = iv_width iv_height = iv_height iv_style = 'F' ).
+      append_to_page( mv_text_color ).
+    ENDIF.
+
+    IF iv_border IS INITIAL.
+      RETURN.
+    ENDIF.
+
+    IF iv_border = '1' OR iv_border = 'LTRB'.
+      rect( iv_x = iv_x iv_y = iv_y iv_width = iv_width iv_height = iv_height ).
+      RETURN.
+    ENDIF.
+
+    IF iv_border CS 'L'.
+      line( iv_x1 = iv_x iv_y1 = iv_y iv_x2 = iv_x iv_y2 = iv_y + iv_height ).
+    ENDIF.
+    IF iv_border CS 'T'.
+      line( iv_x1 = iv_x iv_y1 = iv_y iv_x2 = iv_x + iv_width iv_y2 = iv_y ).
+    ENDIF.
+    IF iv_border CS 'R'.
+      line( iv_x1 = iv_x + iv_width iv_y1 = iv_y iv_x2 = iv_x + iv_width iv_y2 = iv_y + iv_height ).
+    ENDIF.
+    IF iv_border CS 'B'.
+      line( iv_x1 = iv_x iv_y1 = iv_y + iv_height iv_x2 = iv_x + iv_width iv_y2 = iv_y + iv_height ).
+    ENDIF.
+  ENDMETHOD.
+
+  METHOD cell.
+    DATA lv_width TYPE f.
+    DATA lv_height TYPE f.
+    DATA lv_text_x TYPE f.
+
+    lv_width = iv_width.
+    IF lv_width <= 0.
+      lv_width = get_page_width( ) - mv_margin_right - mv_x.
+    ENDIF.
+
+    lv_height = iv_height.
+    IF lv_height <= 0.
+      lv_height = mv_line_height.
+    ENDIF.
+
+    draw_cell_box(
+      iv_x      = mv_x
+      iv_y      = mv_y
+      iv_width  = lv_width
+      iv_height = lv_height
+      iv_border = iv_border
+      iv_fill   = iv_fill ).
+
+    IF iv_text IS NOT INITIAL.
+      DATA(lv_text_width) = get_text_width( iv_text ).
+      CASE iv_align.
+        WHEN c_align_center.
+          lv_text_x = mv_x + ( lv_width - lv_text_width ) / 2.
+        WHEN c_align_right.
+          lv_text_x = mv_x + lv_width - lv_text_width - iv_padding.
+        WHEN OTHERS.
+          lv_text_x = mv_x + iv_padding.
+      ENDCASE.
+
+      " Baseline, roughly vertically centered in the box
+      text(
+        iv_x    = lv_text_x
+        iv_y    = mv_y + ( lv_height + mv_current_font_size * '0.7' ) / 2
+        iv_text = iv_text ).
+    ENDIF.
+
+    IF iv_ln = abap_true.
+      mv_y = mv_y + lv_height.
+      mv_x = mv_margin_left.
+    ELSE.
+      mv_x = mv_x + lv_width.
+    ENDIF.
+
+    ro_pdf = me.
+  ENDMETHOD.
+
+  METHOD multi_cell.
+    DATA lv_line TYPE string.
+    DATA lv_width TYPE f.
+    DATA lv_height TYPE f.
+    DATA lv_border TYPE string.
+
+    lv_width = iv_width.
+    IF lv_width <= 0.
+      lv_width = get_page_width( ) - mv_margin_right - mv_x.
+    ENDIF.
+
+    lv_height = iv_height.
+    IF lv_height <= 0.
+      lv_height = mv_line_height.
+    ENDIF.
+
+    DATA(lv_x) = mv_x.
+    DATA(lt_lines) = zcl_open_abap_pdf_font=>wrap(
+      iv_font  = mv_current_font
+      iv_size  = mv_current_font_size
+      iv_text  = iv_text
+      iv_width = lv_width - 2 * iv_padding ).
+
+    LOOP AT lt_lines INTO lv_line.
+      IF check_page_break( lv_height ) = abap_true.
+        lv_x = mv_margin_left.
+      ENDIF.
+      mv_x = lv_x.
+
+      lv_border = iv_border.
+      IF iv_border = '1' OR iv_border = 'LTRB'.
+        " Keep the block outline continuous instead of boxing every line
+        lv_border = 'LR'.
+        IF sy-tabix = 1.
+          lv_border = 'LRT'.
+        ENDIF.
+        IF sy-tabix = lines( lt_lines ).
+          lv_border = |{ lv_border }B|.
+        ENDIF.
+      ENDIF.
+
+      cell(
+        iv_text    = lv_line
+        iv_width   = lv_width
+        iv_height  = lv_height
+        iv_align   = iv_align
+        iv_border  = lv_border
+        iv_fill    = iv_fill
+        iv_padding = iv_padding ).
+    ENDLOOP.
+
+    mv_x = lv_x.
     ro_pdf = me.
   ENDMETHOD.
 
@@ -332,6 +726,7 @@ CLASS zcl_open_abap_pdf IMPLEMENTATION.
 
   METHOD build_objects.
     DATA lv_pages_id TYPE i.
+    DATA lv_saved_page TYPE i.
     DATA lv_page_ids TYPE string.
     DATA lv_font_resources TYPE string.
     DATA ls_page TYPE ty_page.
@@ -340,28 +735,29 @@ CLASS zcl_open_abap_pdf IMPLEMENTATION.
     DATA lv_page_tabix TYPE i.
     DATA lv_obj_id TYPE i.
 
+    " The footer of the last page is only known once rendering starts
+    lv_saved_page = mv_current_page.
+    run_footer( ).
+    mv_current_page = lv_saved_page.
+
     " Reset objects for fresh render
     CLEAR mt_objects.
     mv_next_obj_id = 1.
 
     " Add fonts first
     LOOP AT mt_fonts INTO ls_font.
-      ls_font-obj_id = add_object( |<< /Type /Font /Subtype /Type1 /BaseFont /{ ls_font-name } >>| ).
+      ls_font-obj_id = add_object(
+        |<< /Type /Font /Subtype /Type1 /BaseFont /{ ls_font-name } /Encoding /WinAnsiEncoding >>| ).
       MODIFY mt_fonts FROM ls_font INDEX sy-tabix.
     ENDLOOP.
 
     " Add page content streams and page objects
     LOOP AT mt_pages INTO ls_page.
       lv_page_tabix = sy-tabix.
-      " Prepare content stream with font setup
-      lv_stream = ''.
-      IF mv_current_font IS NOT INITIAL.
-        LOOP AT mt_fonts INTO ls_font WHERE name = mv_current_font.
-          lv_stream = |/F{ ls_font-id } { format_number( mv_current_font_size ) } Tf |.
-          EXIT.
-        ENDLOOP.
+      lv_stream = ls_page-content.
+      IF mv_nb_alias IS NOT INITIAL.
+        REPLACE ALL OCCURRENCES OF mv_nb_alias IN lv_stream WITH |{ lines( mt_pages ) }|.
       ENDIF.
-      lv_stream = lv_stream && ls_page-content.
 
       ls_page-content_id = add_stream_object( iv_data = cl_abap_codepage=>convert_to( lv_stream ) ).
       MODIFY mt_pages FROM ls_page INDEX lv_page_tabix.
@@ -465,6 +861,23 @@ CLASS zcl_open_abap_pdf IMPLEMENTATION.
     ENDIF.
   ENDMETHOD.
 
+  METHOD get_text_width.
+    DATA(lv_font) = mv_current_font.
+    DATA(lv_size) = mv_current_font_size.
+
+    IF iv_font IS SUPPLIED AND iv_font IS NOT INITIAL.
+      lv_font = iv_font.
+    ENDIF.
+    IF iv_size > 0.
+      lv_size = iv_size.
+    ENDIF.
+
+    rv_width = zcl_open_abap_pdf_font=>text_width(
+      iv_font = lv_font
+      iv_size = lv_size
+      iv_text = iv_text ).
+  ENDMETHOD.
+
   METHOD mm_to_pt.
     rv_pt = iv_mm * c_pt_per_mm.
   ENDMETHOD.
@@ -494,23 +907,7 @@ CLASS zcl_open_abap_pdf IMPLEMENTATION.
   ENDMETHOD.
 
   METHOD escape_string.
-    DATA lv_char TYPE string.
-    DATA lv_i TYPE i.
-    DATA lv_len TYPE i.
-
-    rv_escaped = ''.
-    lv_len = strlen( iv_text ).
-    lv_i = 0.
-    WHILE lv_i < lv_len.
-      lv_char = iv_text+lv_i(1).
-      CASE lv_char.
-        WHEN '(' OR ')' OR '\'.
-          rv_escaped = rv_escaped && '\' && lv_char.
-        WHEN OTHERS.
-          rv_escaped = rv_escaped && lv_char.
-      ENDCASE.
-      lv_i = lv_i + 1.
-    ENDWHILE.
+    rv_escaped = zcl_open_abap_pdf_font=>escape( iv_text ).
   ENDMETHOD.
 
   METHOD get_font_id.

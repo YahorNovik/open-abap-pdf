@@ -9,6 +9,11 @@ CLASS ltcl_pdf_test DEFINITION FOR TESTING RISK LEVEL HARMLESS DURATION SHORT.
     METHODS test_mm_to_pt FOR TESTING RAISING cx_static_check.
     METHODS test_inch_to_pt FOR TESTING RAISING cx_static_check.
     METHODS test_fluent_api FOR TESTING RAISING cx_static_check.
+    METHODS test_letter_size FOR TESTING RAISING cx_static_check.
+    METHODS test_cursor_and_cell FOR TESTING RAISING cx_static_check.
+    METHODS test_auto_page_break FOR TESTING RAISING cx_static_check.
+    METHODS test_alias_nb_pages FOR TESTING RAISING cx_static_check.
+    METHODS test_multi_cell_wraps FOR TESTING RAISING cx_static_check.
 ENDCLASS.
 
 CLASS ltcl_pdf_test IMPLEMENTATION.
@@ -109,6 +114,87 @@ CLASS ltcl_pdf_test IMPLEMENTATION.
     cl_abap_unit_assert=>assert_equals(
       act = lv_pt
       exp = 72 ).
+  ENDMETHOD.
+
+  METHOD test_letter_size.
+    DATA(lo_pdf) = zcl_open_abap_pdf=>create( ).
+    lo_pdf->add_page(
+      iv_width  = zcl_open_abap_pdf=>c_letter_width
+      iv_height = zcl_open_abap_pdf=>c_letter_height ).
+
+    cl_abap_unit_assert=>assert_equals(
+      act = lo_pdf->get_page_width( )
+      exp = 612 ).
+    cl_abap_unit_assert=>assert_equals(
+      act = lo_pdf->get_page_height( )
+      exp = 792 ).
+  ENDMETHOD.
+
+  METHOD test_cursor_and_cell.
+    DATA(lo_pdf) = zcl_open_abap_pdf=>create( ).
+    lo_pdf->set_margins( iv_left = 40 iv_top = 50 iv_right = 40 iv_bottom = 40 ).
+    lo_pdf->add_page( ).
+
+    cl_abap_unit_assert=>assert_equals(
+      act = lo_pdf->get_y( )
+      exp = 50
+      msg = 'cursor starts at the top margin' ).
+    cl_abap_unit_assert=>assert_equals(
+      act = lo_pdf->get_x( )
+      exp = 40 ).
+    cl_abap_unit_assert=>assert_equals(
+      act = lo_pdf->get_content_width( )
+      exp = zcl_open_abap_pdf=>c_a4_width - 80 ).
+
+    lo_pdf->set_line_height( 20 ).
+    lo_pdf->cell( iv_text = 'first' iv_align = zcl_open_abap_pdf=>c_align_left ).
+
+    cl_abap_unit_assert=>assert_equals(
+      act = lo_pdf->get_y( )
+      exp = 70
+      msg = 'cell with ln advances one line' ).
+  ENDMETHOD.
+
+  METHOD test_auto_page_break.
+    DATA(lo_pdf) = zcl_open_abap_pdf=>create( ).
+    lo_pdf->add_page( ).
+    lo_pdf->set_line_height( 20 ).
+
+    DO 60 TIMES.
+      lo_pdf->multi_cell( iv_text = |line { sy-index }| ).
+    ENDDO.
+
+    cl_abap_unit_assert=>assert_true(
+      act = xsdbool( lo_pdf->get_page_count( ) > 1 )
+      msg = 'content longer than one page must break' ).
+  ENDMETHOD.
+
+  METHOD test_alias_nb_pages.
+    DATA(lo_pdf) = zcl_open_abap_pdf=>create( ).
+    lo_pdf->add_page( ).
+    lo_pdf->add_page( ).
+    lo_pdf->cell( iv_text = 'of {nb} pages' ).
+
+    DATA(lv_result) = lo_pdf->render( ).
+
+    cl_abap_unit_assert=>assert_char_cp(
+      act = lv_result
+      exp = '*(of 2 pages)*' ).
+  ENDMETHOD.
+
+  METHOD test_multi_cell_wraps.
+    DATA(lo_pdf) = zcl_open_abap_pdf=>create( ).
+    lo_pdf->add_page( ).
+    lo_pdf->set_font( iv_name = 'Helvetica' iv_size = 12 ).
+    DATA(lv_y_before) = lo_pdf->get_y( ).
+
+    lo_pdf->multi_cell(
+      iv_text  = 'The quick brown fox jumps over the lazy dog and keeps on running for a while'
+      iv_width = 120 ).
+
+    cl_abap_unit_assert=>assert_true(
+      act = xsdbool( lo_pdf->get_y( ) > lv_y_before + 2 * 14 )
+      msg = 'wrapped text must occupy more than two lines' ).
   ENDMETHOD.
 
   METHOD test_fluent_api.
