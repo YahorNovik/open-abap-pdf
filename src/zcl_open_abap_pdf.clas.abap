@@ -24,6 +24,22 @@ CLASS zcl_open_abap_pdf DEFINITION PUBLIC.
       END OF ty_image,
       ty_images TYPE STANDARD TABLE OF ty_image WITH DEFAULT KEY,
 
+      BEGIN OF ty_field,
+        kind     TYPE string,
+        name     TYPE string,
+        value    TYPE string,
+        options  TYPE string,
+        rect     TYPE string,
+        page_id  TYPE i,
+        flags    TYPE i,
+        max_len  TYPE i,
+        quadding TYPE i,
+        size     TYPE f,
+        checked  TYPE abap_bool,
+        obj_id   TYPE i,
+      END OF ty_field,
+      ty_fields TYPE STANDARD TABLE OF ty_field WITH DEFAULT KEY,
+
       BEGIN OF ty_page,
         id         TYPE i,
         obj_id     TYPE i,
@@ -269,6 +285,67 @@ CLASS zcl_open_abap_pdf DEFINITION PUBLIC.
       RETURNING VALUE(ro_pdf) TYPE REF TO zcl_open_abap_pdf
       RAISING   zcx_open_abap_pdf.
 
+    "! Interactive text input field
+    "! @parameter iv_name | Field name, also used as the key when the form is read back
+    "! @parameter iv_align | 0 left, 1 center, 2 right
+    METHODS text_field
+      IMPORTING iv_name       TYPE string
+                iv_x          TYPE f
+                iv_y          TYPE f
+                iv_width      TYPE f
+                iv_height     TYPE f DEFAULT 18
+                iv_value      TYPE string DEFAULT ''
+                iv_multiline  TYPE abap_bool DEFAULT abap_false
+                iv_required   TYPE abap_bool DEFAULT abap_false
+                iv_readonly   TYPE abap_bool DEFAULT abap_false
+                iv_password   TYPE abap_bool DEFAULT abap_false
+                iv_max_len    TYPE i DEFAULT 0
+                iv_align      TYPE i DEFAULT 0
+                iv_size       TYPE f DEFAULT 10
+      RETURNING VALUE(ro_pdf) TYPE REF TO zcl_open_abap_pdf.
+
+    "! Interactive check box
+    METHODS checkbox
+      IMPORTING iv_name       TYPE string
+                iv_x          TYPE f
+                iv_y          TYPE f
+                iv_size       TYPE f DEFAULT 12
+                iv_checked    TYPE abap_bool DEFAULT abap_false
+                iv_readonly   TYPE abap_bool DEFAULT abap_false
+      RETURNING VALUE(ro_pdf) TYPE REF TO zcl_open_abap_pdf.
+
+    "! One button of a radio group, all buttons of a group share iv_name
+    METHODS radio_button
+      IMPORTING iv_name       TYPE string
+                iv_value      TYPE string
+                iv_x          TYPE f
+                iv_y          TYPE f
+                iv_size       TYPE f DEFAULT 12
+                iv_selected   TYPE abap_bool DEFAULT abap_false
+      RETURNING VALUE(ro_pdf) TYPE REF TO zcl_open_abap_pdf.
+
+    "! Interactive drop down list
+    METHODS dropdown
+      IMPORTING iv_name       TYPE string
+                it_options    TYPE zcl_open_abap_pdf_font=>ty_lines
+                iv_x          TYPE f
+                iv_y          TYPE f
+                iv_width      TYPE f
+                iv_height     TYPE f DEFAULT 18
+                iv_value      TYPE string DEFAULT ''
+                iv_editable   TYPE abap_bool DEFAULT abap_false
+                iv_size       TYPE f DEFAULT 10
+      RETURNING VALUE(ro_pdf) TYPE REF TO zcl_open_abap_pdf.
+
+    "! Draw form fields as static boxes with their value instead of interactive widgets
+    METHODS set_flatten_form
+      IMPORTING iv_active     TYPE abap_bool DEFAULT abap_true
+      RETURNING VALUE(ro_pdf) TYPE REF TO zcl_open_abap_pdf.
+
+    "! Number of interactive fields in the document
+    METHODS get_field_count
+      RETURNING VALUE(rv_count) TYPE i.
+
     "! Place a base64 encoded JPEG or PNG image
     METHODS image_base64
       IMPORTING iv_base64     TYPE string
@@ -317,9 +394,12 @@ CLASS zcl_open_abap_pdf DEFINITION PUBLIC.
     DATA mo_layout TYPE REF TO zif_open_abap_pdf_layout.
     DATA mv_in_layout TYPE abap_bool.
     DATA mv_hex_images TYPE abap_bool.
+    DATA mv_flatten TYPE abap_bool.
+    DATA mt_fields TYPE ty_fields.
 
     METHODS add_object
       IMPORTING iv_content   TYPE string
+                iv_id        TYPE i DEFAULT 0
       RETURNING VALUE(rv_id) TYPE i.
 
     METHODS add_stream_object
@@ -354,6 +434,26 @@ CLASS zcl_open_abap_pdf DEFINITION PUBLIC.
 
     METHODS build_images
       RETURNING VALUE(rv_xobjects) TYPE string.
+
+    METHODS build_fields
+      RETURNING VALUE(rv_field_ids) TYPE string.
+
+    METHODS add_field
+      IMPORTING is_field TYPE ty_field.
+
+    METHODS field_rect
+      IMPORTING iv_x           TYPE f
+                iv_y           TYPE f
+                iv_width       TYPE f
+                iv_height      TYPE f
+      RETURNING VALUE(rv_rect) TYPE string.
+
+    METHODS reserve_id
+      RETURNING VALUE(rv_id) TYPE i.
+
+    METHODS annots_of_page
+      IMPORTING iv_page_id       TYPE i
+      RETURNING VALUE(rv_annots) TYPE string.
 
     METHODS emit_page_state.
 
@@ -825,7 +925,10 @@ CLASS zcl_open_abap_pdf IMPLEMENTATION.
     DATA ls_font TYPE ty_font.
     DATA lv_stream TYPE string.
     DATA lv_page_tabix TYPE i.
-    DATA lv_obj_id TYPE i.
+    DATA lv_encoding TYPE string.
+    DATA lv_field_ids TYPE string.
+    DATA lv_annots TYPE string.
+    DATA lv_catalog TYPE string.
 
     " The footer of the last page is only known once rendering starts
     lv_saved_page = mv_current_page.
@@ -836,10 +939,20 @@ CLASS zcl_open_abap_pdf IMPLEMENTATION.
     CLEAR mt_objects.
     mv_next_obj_id = 1.
 
+    " Interactive fields need Helvetica for the text and ZapfDingbats for the check marks
+    IF mt_fields IS NOT INITIAL.
+      ensure_font( 'Helvetica' ).
+      ensure_font( 'ZapfDingbats' ).
+    ENDIF.
+
     " Add fonts first
     LOOP AT mt_fonts INTO ls_font.
+      lv_encoding = ' /Encoding /WinAnsiEncoding'.
+      IF ls_font-name = 'ZapfDingbats' OR ls_font-name = 'Symbol'.
+        CLEAR lv_encoding.
+      ENDIF.
       ls_font-obj_id = add_object(
-        |<< /Type /Font /Subtype /Type1 /BaseFont /{ ls_font-name } /Encoding /WinAnsiEncoding >>| ).
+        |<< /Type /Font /Subtype /Type1 /BaseFont /{ ls_font-name }{ lv_encoding } >>| ).
       MODIFY mt_fonts FROM ls_font INDEX sy-tabix.
     ENDLOOP.
 
@@ -871,21 +984,317 @@ CLASS zcl_open_abap_pdf IMPLEMENTATION.
       lv_resources = |{ lv_resources } /XObject << { lv_xobjects } >>|.
     ENDIF.
 
-    lv_pages_id = mv_next_obj_id + lines( mt_pages ).
-    LOOP AT mt_pages INTO ls_page.
-      lv_obj_id = add_object( |<< /Type /Page /Parent { lv_pages_id } 0 R /MediaBox [0 0 { format_number( ls_page-width ) } { format_number( ls_page-height ) }] /Contents { ls_page-content_id } 0 R /Resources << { lv_resources } >> >>| ).
-
+    " Page objects are referenced by the field annotations, so reserve their ids first
+    LOOP AT mt_pages ASSIGNING FIELD-SYMBOL(<ls_page>).
+      <ls_page>-obj_id = reserve_id( ).
       IF lv_page_ids IS NOT INITIAL.
         lv_page_ids = lv_page_ids && | |.
       ENDIF.
-      lv_page_ids = lv_page_ids && |{ lv_obj_id } 0 R|.
+      lv_page_ids = lv_page_ids && |{ <ls_page>-obj_id } 0 R|.
+    ENDLOOP.
+
+    lv_field_ids = build_fields( ).
+    lv_pages_id = reserve_id( ).
+
+    LOOP AT mt_pages INTO ls_page.
+      lv_annots = annots_of_page( ls_page-id ).
+      IF lv_annots IS NOT INITIAL.
+        lv_annots = | /Annots [{ lv_annots }]|.
+      ENDIF.
+
+      add_object(
+        iv_id      = ls_page-obj_id
+        iv_content = |<< /Type /Page /Parent { lv_pages_id } 0 R /MediaBox [0 0 { format_number( ls_page-width ) } { format_number( ls_page-height ) }] /Contents { ls_page-content_id } 0 R /Resources << { lv_resources } >>{ lv_annots } >>| ).
     ENDLOOP.
 
     " Add pages object
-    lv_pages_id = add_object( |<< /Type /Pages /Kids [{ lv_page_ids }] /Count { lines( mt_pages ) } >>| ).
+    add_object(
+      iv_id      = lv_pages_id
+      iv_content = |<< /Type /Pages /Kids [{ lv_page_ids }] /Count { lines( mt_pages ) } >>| ).
 
-    " Add catalog
-    rv_catalog_id = add_object( |<< /Type /Catalog /Pages { lv_pages_id } 0 R >>| ).
+    " Add catalog, with the interactive form when there are fields
+    lv_catalog = |<< /Type /Catalog /Pages { lv_pages_id } 0 R|.
+    IF lv_field_ids IS NOT INITIAL.
+      READ TABLE mt_fonts INTO ls_font WITH KEY name = 'Helvetica'.
+      DATA(lv_helv_id) = ls_font-obj_id.
+      READ TABLE mt_fonts INTO ls_font WITH KEY name = 'ZapfDingbats'.
+      lv_catalog = |{ lv_catalog } /AcroForm << /Fields [{ lv_field_ids }] | &&
+                   |/NeedAppearances true /DA (/Helv 0 Tf 0 g) | &&
+                   |/DR << /Font << /Helv { lv_helv_id } 0 R /ZaDb { ls_font-obj_id } 0 R >> >> >>|.
+    ENDIF.
+
+    rv_catalog_id = add_object( |{ lv_catalog } >>| ).
+  ENDMETHOD.
+
+  METHOD build_fields.
+    TYPES:
+      BEGIN OF ty_group,
+        name      TYPE string,
+        parent_id TYPE i,
+        value     TYPE string,
+        kids      TYPE string,
+      END OF ty_group.
+    DATA lt_groups TYPE STANDARD TABLE OF ty_group WITH DEFAULT KEY.
+    DATA ls_field TYPE ty_field.
+    DATA ls_page TYPE ty_page.
+    DATA lv_dict TYPE string.
+    DATA lv_as TYPE string.
+
+    LOOP AT mt_fields INTO ls_field.
+      DATA(lv_index) = sy-tabix.
+      READ TABLE mt_pages INTO ls_page WITH KEY id = ls_field-page_id.
+      DATA(lv_common) = |/Type /Annot /Subtype /Widget /Rect { ls_field-rect } | &&
+                        |/F 4 /P { ls_page-obj_id } 0 R|.
+      DATA(lv_name) = zcl_open_abap_pdf_font=>escape( ls_field-name ).
+
+      CASE ls_field-kind.
+        WHEN 'TX'.
+          lv_dict = |<< { lv_common } /FT /Tx /T ({ lv_name }) | &&
+                    |/V ({ zcl_open_abap_pdf_font=>escape( ls_field-value ) }) | &&
+                    |/DA (/Helv { format_number( ls_field-size ) } Tf 0 g) | &&
+                    |/MK << /BC [0 0 0] /BG [1 1 1] >>|.
+          IF ls_field-flags > 0.
+            lv_dict = |{ lv_dict } /Ff { ls_field-flags }|.
+          ENDIF.
+          IF ls_field-max_len > 0.
+            lv_dict = |{ lv_dict } /MaxLen { ls_field-max_len }|.
+          ENDIF.
+          IF ls_field-quadding > 0.
+            lv_dict = |{ lv_dict } /Q { ls_field-quadding }|.
+          ENDIF.
+        WHEN 'BTN'.
+          lv_as = 'Off'.
+          IF ls_field-checked = abap_true.
+            lv_as = 'Yes'.
+          ENDIF.
+          lv_dict = |<< { lv_common } /FT /Btn /T ({ lv_name }) /V /{ lv_as } /AS /{ lv_as } | &&
+                    |/DA (/ZaDb { format_number( ls_field-size * '0.8' ) } Tf 0 g) | &&
+                    |/MK << /BC [0 0 0] /BG [1 1 1] /CA (4) >>|.
+          IF ls_field-flags > 0.
+            lv_dict = |{ lv_dict } /Ff { ls_field-flags }|.
+          ENDIF.
+        WHEN 'CH'.
+          lv_dict = |<< { lv_common } /FT /Ch /T ({ lv_name }) | &&
+                    |/V ({ zcl_open_abap_pdf_font=>escape( ls_field-value ) }) | &&
+                    |/Opt [{ ls_field-options }] /Ff { ls_field-flags } | &&
+                    |/DA (/Helv { format_number( ls_field-size ) } Tf 0 g) | &&
+                    |/MK << /BC [0 0 0] /BG [1 1 1] >>|.
+        WHEN OTHERS.
+          READ TABLE lt_groups ASSIGNING FIELD-SYMBOL(<ls_group>) WITH KEY name = ls_field-name.
+          IF sy-subrc <> 0.
+            APPEND VALUE ty_group(
+              name      = ls_field-name
+              parent_id = reserve_id( ) ) TO lt_groups.
+            READ TABLE lt_groups ASSIGNING <ls_group> INDEX lines( lt_groups ).
+          ENDIF.
+
+          lv_as = 'Off'.
+          IF ls_field-checked = abap_true.
+            lv_as = ls_field-value.
+            <ls_group>-value = ls_field-value.
+          ENDIF.
+
+          lv_dict = |<< { lv_common } /Parent { <ls_group>-parent_id } 0 R | &&
+                    |/AS /{ lv_as } /DA (/ZaDb 0 Tf 0 g) | &&
+                    |/MK << /BC [0 0 0] /BG [1 1 1] /CA (l) >>|.
+      ENDCASE.
+
+      ls_field-obj_id = add_object( |{ lv_dict } >>| ).
+      MODIFY mt_fields FROM ls_field INDEX lv_index.
+
+      IF ls_field-kind = 'RADIO'.
+        READ TABLE lt_groups ASSIGNING <ls_group> WITH KEY name = ls_field-name.
+        IF <ls_group>-kids IS NOT INITIAL.
+          <ls_group>-kids = <ls_group>-kids && | |.
+        ENDIF.
+        <ls_group>-kids = <ls_group>-kids && |{ ls_field-obj_id } 0 R|.
+        CONTINUE.
+      ENDIF.
+
+      IF rv_field_ids IS NOT INITIAL.
+        rv_field_ids = rv_field_ids && | |.
+      ENDIF.
+      rv_field_ids = rv_field_ids && |{ ls_field-obj_id } 0 R|.
+    ENDLOOP.
+
+    LOOP AT lt_groups ASSIGNING <ls_group>.
+      lv_as = <ls_group>-value.
+      IF lv_as IS INITIAL.
+        lv_as = 'Off'.
+      ENDIF.
+
+      add_object(
+        iv_id      = <ls_group>-parent_id
+        iv_content = |<< /FT /Btn /Ff 32768 | &&
+                     |/T ({ zcl_open_abap_pdf_font=>escape( <ls_group>-name ) }) | &&
+                     |/V /{ lv_as } /Kids [{ <ls_group>-kids }] >>| ).
+
+      IF rv_field_ids IS NOT INITIAL.
+        rv_field_ids = rv_field_ids && | |.
+      ENDIF.
+      rv_field_ids = rv_field_ids && |{ <ls_group>-parent_id } 0 R|.
+    ENDLOOP.
+  ENDMETHOD.
+
+  METHOD field_rect.
+    DATA(lv_top) = transform_y( iv_y ).
+    rv_rect = |[{ format_number( iv_x ) } { format_number( lv_top - iv_height ) } | &&
+              |{ format_number( iv_x + iv_width ) } { format_number( lv_top ) }]|.
+  ENDMETHOD.
+
+  METHOD add_field.
+    DATA ls_field TYPE ty_field.
+
+    ls_field = is_field.
+    ls_field-page_id = mv_current_page.
+    APPEND ls_field TO mt_fields.
+  ENDMETHOD.
+
+  METHOD get_field_count.
+    rv_count = lines( mt_fields ).
+  ENDMETHOD.
+
+  METHOD set_flatten_form.
+    mv_flatten = iv_active.
+    ro_pdf = me.
+  ENDMETHOD.
+
+  METHOD text_field.
+    DATA lv_flags TYPE i.
+
+    ro_pdf = me.
+
+    IF mv_flatten = abap_true.
+      DATA(lv_saved_x) = mv_x.
+      DATA(lv_saved_y) = mv_y.
+      set_xy( iv_x = iv_x iv_y = iv_y ).
+      cell(
+        iv_text   = iv_value
+        iv_width  = iv_width
+        iv_height = iv_height
+        iv_border = '1'
+        iv_align  = COND string( WHEN iv_align = 1 THEN c_align_center
+                                 WHEN iv_align = 2 THEN c_align_right
+                                 ELSE c_align_left ) ).
+      set_xy( iv_x = lv_saved_x iv_y = lv_saved_y ).
+      RETURN.
+    ENDIF.
+
+    IF iv_readonly = abap_true.
+      lv_flags = lv_flags + 1.
+    ENDIF.
+    IF iv_required = abap_true.
+      lv_flags = lv_flags + 2.
+    ENDIF.
+    IF iv_password = abap_true.
+      lv_flags = lv_flags + 8192.
+    ENDIF.
+    IF iv_multiline = abap_true.
+      lv_flags = lv_flags + 4096.
+    ENDIF.
+
+    add_field( VALUE ty_field(
+      kind     = 'TX'
+      name     = iv_name
+      value    = iv_value
+      rect     = field_rect( iv_x = iv_x iv_y = iv_y iv_width = iv_width iv_height = iv_height )
+      flags    = lv_flags
+      max_len  = iv_max_len
+      quadding = iv_align
+      size     = iv_size ) ).
+  ENDMETHOD.
+
+  METHOD checkbox.
+    ro_pdf = me.
+
+    IF mv_flatten = abap_true.
+      rect( iv_x = iv_x iv_y = iv_y iv_width = iv_size iv_height = iv_size ).
+      IF iv_checked = abap_true.
+        line( iv_x1 = iv_x + 2 iv_y1 = iv_y + 2
+              iv_x2 = iv_x + iv_size - 2 iv_y2 = iv_y + iv_size - 2 ).
+        line( iv_x1 = iv_x + iv_size - 2 iv_y1 = iv_y + 2
+              iv_x2 = iv_x + 2 iv_y2 = iv_y + iv_size - 2 ).
+      ENDIF.
+      RETURN.
+    ENDIF.
+
+    add_field( VALUE ty_field(
+      kind    = 'BTN'
+      name    = iv_name
+      value   = 'Yes'
+      rect    = field_rect( iv_x = iv_x iv_y = iv_y iv_width = iv_size iv_height = iv_size )
+      flags   = COND i( WHEN iv_readonly = abap_true THEN 1 ELSE 0 )
+      size    = iv_size
+      checked = iv_checked ) ).
+  ENDMETHOD.
+
+  METHOD radio_button.
+    ro_pdf = me.
+
+    IF mv_flatten = abap_true.
+      circle( iv_x = iv_x + iv_size / 2 iv_y = iv_y + iv_size / 2 iv_radius = iv_size / 2 ).
+      IF iv_selected = abap_true.
+        append_to_page( mv_text_color ).
+        circle(
+          iv_x      = iv_x + iv_size / 2
+          iv_y      = iv_y + iv_size / 2
+          iv_radius = iv_size / 4
+          iv_style  = 'F' ).
+      ENDIF.
+      RETURN.
+    ENDIF.
+
+    add_field( VALUE ty_field(
+      kind    = 'RADIO'
+      name    = iv_name
+      value   = iv_value
+      rect    = field_rect( iv_x = iv_x iv_y = iv_y iv_width = iv_size iv_height = iv_size )
+      size    = iv_size
+      checked = iv_selected ) ).
+  ENDMETHOD.
+
+  METHOD dropdown.
+    DATA lv_option TYPE string.
+    DATA lv_options TYPE string.
+
+    ro_pdf = me.
+
+    LOOP AT it_options INTO lv_option.
+      lv_options = |{ lv_options }({ zcl_open_abap_pdf_font=>escape( lv_option ) }) |.
+    ENDLOOP.
+
+    IF mv_flatten = abap_true.
+      DATA(lv_saved_x) = mv_x.
+      DATA(lv_saved_y) = mv_y.
+      set_xy( iv_x = iv_x iv_y = iv_y ).
+      cell(
+        iv_text   = iv_value
+        iv_width  = iv_width
+        iv_height = iv_height
+        iv_border = '1' ).
+      set_xy( iv_x = lv_saved_x iv_y = lv_saved_y ).
+      RETURN.
+    ENDIF.
+
+    add_field( VALUE ty_field(
+      kind     = 'CH'
+      name     = iv_name
+      value    = iv_value
+      options  = lv_options
+      rect     = field_rect( iv_x = iv_x iv_y = iv_y iv_width = iv_width iv_height = iv_height )
+      flags    = COND i( WHEN iv_editable = abap_true THEN 393216 ELSE 131072 )
+      size     = iv_size ) ).
+  ENDMETHOD.
+
+  METHOD annots_of_page.
+    DATA ls_field TYPE ty_field.
+
+    LOOP AT mt_fields INTO ls_field WHERE page_id = iv_page_id.
+      IF rv_annots IS NOT INITIAL.
+        rv_annots = rv_annots && | |.
+      ENDIF.
+      rv_annots = rv_annots && |{ ls_field-obj_id } 0 R|.
+    ENDLOOP.
   ENDMETHOD.
 
   METHOD build_images.
@@ -956,6 +1365,9 @@ CLASS zcl_open_abap_pdf IMPLEMENTATION.
     DATA lv_startxref TYPE i.
 
     DATA(lv_catalog_id) = build_objects( ).
+
+    " The xref table lists the objects in ascending object number
+    SORT mt_objects BY id.
 
     CREATE OBJECT lo_writer.
 
@@ -1040,22 +1452,30 @@ CLASS zcl_open_abap_pdf IMPLEMENTATION.
   ENDMETHOD.
 
   METHOD add_object.
+    DATA(lv_id) = iv_id.
+    IF lv_id = 0.
+      lv_id = reserve_id( ).
+    ENDIF.
+
     DATA(ls_object) = VALUE ty_object(
-        id = mv_next_obj_id
+        id = lv_id
         content = iv_content ).
     APPEND ls_object TO mt_objects.
+    rv_id = lv_id.
+  ENDMETHOD.
+
+  METHOD reserve_id.
+    rv_id = mv_next_obj_id.
     mv_next_obj_id = mv_next_obj_id + 1.
-    rv_id = ls_object-id.
   ENDMETHOD.
 
   METHOD add_stream_object.
     DATA(ls_object) = VALUE ty_object(
-        id = mv_next_obj_id
+        id = reserve_id( )
         content = |{ iv_dict } /Length { xstrlen( iv_data ) } >>|
         stream = iv_data
         is_stream = abap_true ).
     APPEND ls_object TO mt_objects.
-    mv_next_obj_id = mv_next_obj_id + 1.
     rv_id = ls_object-id.
   ENDMETHOD.
 

@@ -1,3 +1,161 @@
+CLASS ltcl_form DEFINITION FOR TESTING RISK LEVEL HARMLESS DURATION SHORT.
+  PRIVATE SECTION.
+    METHODS text_field FOR TESTING RAISING cx_static_check.
+    METHODS text_field_flags FOR TESTING RAISING cx_static_check.
+    METHODS checkbox FOR TESTING RAISING cx_static_check.
+    METHODS dropdown FOR TESTING RAISING cx_static_check.
+    METHODS radio_group FOR TESTING RAISING cx_static_check.
+    METHODS flatten FOR TESTING RAISING cx_static_check.
+    METHODS no_acroform_without_fields FOR TESTING RAISING cx_static_check.
+ENDCLASS.
+
+CLASS ltcl_form IMPLEMENTATION.
+
+  METHOD text_field.
+    DATA(lo_pdf) = zcl_open_abap_pdf=>create( ).
+    lo_pdf->add_page( ).
+    lo_pdf->text_field(
+      iv_name  = 'EMPLOYEE'
+      iv_x     = 100
+      iv_y     = 200
+      iv_width = 150
+      iv_value = 'Lars Hvam' ).
+
+    DATA(lv_pdf) = lo_pdf->render( ).
+
+    cl_abap_unit_assert=>assert_equals( act = lo_pdf->get_field_count( ) exp = 1 ).
+    cl_abap_unit_assert=>assert_char_cp( act = lv_pdf exp = '*/AcroForm*' ).
+    cl_abap_unit_assert=>assert_char_cp( act = lv_pdf exp = '*/NeedAppearances true*' ).
+    cl_abap_unit_assert=>assert_char_cp( act = lv_pdf exp = '*/FT /Tx /T (EMPLOYEE)*' ).
+    cl_abap_unit_assert=>assert_char_cp( act = lv_pdf exp = '*/V (Lars Hvam)*' ).
+    cl_abap_unit_assert=>assert_char_cp( act = lv_pdf exp = '*/Annots [*' ).
+
+    " Rect is measured from the bottom of the page
+    cl_abap_unit_assert=>assert_char_cp( act = lv_pdf exp = '*/Rect [100 623.89 250 641.89]*' ).
+  ENDMETHOD.
+
+  METHOD text_field_flags.
+    DATA(lo_pdf) = zcl_open_abap_pdf=>create( ).
+    lo_pdf->add_page( ).
+    lo_pdf->text_field(
+      iv_name      = 'NOTE'
+      iv_x         = 10
+      iv_y         = 10
+      iv_width     = 100
+      iv_multiline = abap_true
+      iv_required  = abap_true
+      iv_max_len   = 40
+      iv_align     = 2 ).
+
+    DATA(lv_pdf) = lo_pdf->render( ).
+
+    " multiline 4096 plus required 2
+    cl_abap_unit_assert=>assert_char_cp( act = lv_pdf exp = '*/Ff 4098*' ).
+    cl_abap_unit_assert=>assert_char_cp( act = lv_pdf exp = '*/MaxLen 40*' ).
+    cl_abap_unit_assert=>assert_char_cp( act = lv_pdf exp = '*/Q 2*' ).
+  ENDMETHOD.
+
+  METHOD checkbox.
+    DATA(lo_pdf) = zcl_open_abap_pdf=>create( ).
+    lo_pdf->add_page( ).
+    lo_pdf->checkbox( iv_name = 'ADVANCE' iv_x = 10 iv_y = 10 iv_checked = abap_true ).
+    lo_pdf->checkbox( iv_name = 'URGENT' iv_x = 40 iv_y = 10 ).
+
+    DATA(lv_pdf) = lo_pdf->render( ).
+
+    cl_abap_unit_assert=>assert_equals( act = lo_pdf->get_field_count( ) exp = 2 ).
+    cl_abap_unit_assert=>assert_char_cp( act = lv_pdf exp = '*/T (ADVANCE) /V /Yes /AS /Yes*' ).
+    cl_abap_unit_assert=>assert_char_cp( act = lv_pdf exp = '*/T (URGENT) /V /Off /AS /Off*' ).
+  ENDMETHOD.
+
+  METHOD dropdown.
+    DATA(lo_pdf) = zcl_open_abap_pdf=>create( ).
+    lo_pdf->add_page( ).
+    lo_pdf->dropdown(
+      iv_name    = 'PLANT'
+      it_options = VALUE #( ( '1000' ) ( '2000' ) )
+      iv_x       = 10
+      iv_y       = 10
+      iv_width   = 100
+      iv_value   = '2000' ).
+
+    DATA(lv_pdf) = lo_pdf->render( ).
+
+    cl_abap_unit_assert=>assert_char_cp( act = lv_pdf exp = '*/FT /Ch /T (PLANT)*' ).
+    cl_abap_unit_assert=>assert_char_cp( act = lv_pdf exp = '*/Opt [(1000) (2000) ]*' ).
+    cl_abap_unit_assert=>assert_char_cp( act = lv_pdf exp = '*/Ff 131072*' ).
+  ENDMETHOD.
+
+  METHOD radio_group.
+    DATA lv_offset TYPE i.
+    DATA lv_kids TYPE i.
+
+    DATA(lo_pdf) = zcl_open_abap_pdf=>create( ).
+    lo_pdf->add_page( ).
+    lo_pdf->radio_button(
+      iv_name     = 'LEVEL'
+      iv_value    = 'Manager'
+      iv_x        = 10
+      iv_y        = 10
+      iv_selected = abap_true ).
+    lo_pdf->radio_button( iv_name = 'LEVEL' iv_value = 'Director' iv_x = 60 iv_y = 10 ).
+
+    DATA(lv_pdf) = lo_pdf->render( ).
+
+    cl_abap_unit_assert=>assert_char_cp( act = lv_pdf exp = '*/Ff 32768 /T (LEVEL) /V /Manager /Kids [*' ).
+    cl_abap_unit_assert=>assert_char_cp( act = lv_pdf exp = '*/AS /Manager*' ).
+    cl_abap_unit_assert=>assert_char_cp( act = lv_pdf exp = '*/AS /Off*' ).
+
+    WHILE lv_offset < strlen( lv_pdf ).
+      FIND FIRST OCCURRENCE OF '/Parent' IN SECTION OFFSET lv_offset OF lv_pdf
+        MATCH OFFSET DATA(lv_found).
+      IF sy-subrc <> 0.
+        EXIT.
+      ENDIF.
+      lv_kids = lv_kids + 1.
+      lv_offset = lv_found + 1.
+    ENDWHILE.
+
+    cl_abap_unit_assert=>assert_equals(
+      act = lv_kids
+      exp = 3
+      msg = 'two radio kids plus the parent reference of the page tree' ).
+  ENDMETHOD.
+
+  METHOD flatten.
+    DATA(lo_pdf) = zcl_open_abap_pdf=>create( ).
+    lo_pdf->set_flatten_form( ).
+    lo_pdf->add_page( ).
+    lo_pdf->text_field(
+      iv_name  = 'EMPLOYEE'
+      iv_x     = 10
+      iv_y     = 10
+      iv_width = 100
+      iv_value = 'Lars Hvam' ).
+    lo_pdf->checkbox( iv_name = 'ADVANCE' iv_x = 10 iv_y = 40 iv_checked = abap_true ).
+
+    DATA(lv_pdf) = lo_pdf->render( ).
+
+    cl_abap_unit_assert=>assert_equals( act = lo_pdf->get_field_count( ) exp = 0 ).
+    cl_abap_unit_assert=>assert_char_cp( act = lv_pdf exp = '*(Lars Hvam)*' ).
+
+    FIND FIRST OCCURRENCE OF '/AcroForm' IN lv_pdf.
+    cl_abap_unit_assert=>assert_subrc(
+      exp = 4
+      msg = 'a flattened document has no interactive form' ).
+  ENDMETHOD.
+
+  METHOD no_acroform_without_fields.
+    DATA(lo_pdf) = zcl_open_abap_pdf=>create( ).
+    lo_pdf->add_page( ).
+    lo_pdf->cell( iv_text = 'plain' ).
+
+    FIND FIRST OCCURRENCE OF '/Annots' IN lo_pdf->render( ).
+    cl_abap_unit_assert=>assert_subrc( exp = 4 ).
+  ENDMETHOD.
+
+ENDCLASS.
+
 CLASS ltcl_pdf_test DEFINITION FOR TESTING RISK LEVEL HARMLESS DURATION SHORT.
   PRIVATE SECTION.
     METHODS test_create FOR TESTING RAISING cx_static_check.
