@@ -16,6 +16,14 @@ CLASS zcl_open_abap_pdf DEFINITION PUBLIC.
       END OF ty_object,
       ty_objects TYPE STANDARD TABLE OF ty_object WITH DEFAULT KEY,
 
+      BEGIN OF ty_image,
+        id     TYPE i,
+        obj_id TYPE i,
+        pal_id TYPE i,
+        info   TYPE zcl_open_abap_pdf_image=>ty_info,
+      END OF ty_image,
+      ty_images TYPE STANDARD TABLE OF ty_image WITH DEFAULT KEY,
+
       BEGIN OF ty_page,
         id         TYPE i,
         obj_id     TYPE i,
@@ -164,6 +172,13 @@ CLASS zcl_open_abap_pdf DEFINITION PUBLIC.
       IMPORTING io_layout     TYPE REF TO zif_open_abap_pdf_layout
       RETURNING VALUE(ro_pdf) TYPE REF TO zcl_open_abap_pdf.
 
+    "! Write image streams as ASCII hex instead of raw bytes.
+    "! Doubles the image size, but keeps the whole file 7 bit ASCII, which makes
+    "! render( ) usable for documents with images.
+    METHODS set_hex_images
+      IMPORTING iv_active     TYPE abap_bool DEFAULT abap_true
+      RETURNING VALUE(ro_pdf) TYPE REF TO zcl_open_abap_pdf.
+
     "! Placeholder that is replaced by the total number of pages while rendering
     METHODS set_alias_nb_pages
       IMPORTING iv_alias      TYPE string DEFAULT '{nb}'
@@ -240,6 +255,31 @@ CLASS zcl_open_abap_pdf DEFINITION PUBLIC.
       IMPORTING iv_height        TYPE f
       RETURNING VALUE(rv_broken) TYPE abap_bool.
 
+    "! Place a JPEG or PNG image, position and size in points
+    "! @parameter iv_width | 0 keeps the aspect ratio of iv_height, both 0 uses the pixel size
+    "! @parameter iv_dpi | Resolution used when no size is given, 72 means one pixel per point
+    "! @raising zcx_open_abap_pdf | Unsupported or broken image
+    METHODS image
+      IMPORTING iv_data       TYPE xstring
+                iv_x          TYPE f
+                iv_y          TYPE f
+                iv_width      TYPE f DEFAULT 0
+                iv_height     TYPE f DEFAULT 0
+                iv_dpi        TYPE f DEFAULT 72
+      RETURNING VALUE(ro_pdf) TYPE REF TO zcl_open_abap_pdf
+      RAISING   zcx_open_abap_pdf.
+
+    "! Place a base64 encoded JPEG or PNG image
+    METHODS image_base64
+      IMPORTING iv_base64     TYPE string
+                iv_x          TYPE f
+                iv_y          TYPE f
+                iv_width      TYPE f DEFAULT 0
+                iv_height     TYPE f DEFAULT 0
+                iv_dpi        TYPE f DEFAULT 72
+      RETURNING VALUE(ro_pdf) TYPE REF TO zcl_open_abap_pdf
+      RAISING   zcx_open_abap_pdf.
+
     "! Convert millimeters to points
     CLASS-METHODS mm_to_pt
       IMPORTING iv_mm        TYPE f
@@ -253,6 +293,7 @@ CLASS zcl_open_abap_pdf DEFINITION PUBLIC.
   PRIVATE SECTION.
     DATA mt_pages TYPE ty_pages.
     DATA mt_fonts TYPE ty_fonts.
+    DATA mt_images TYPE ty_images.
     DATA mt_objects TYPE ty_objects.
     DATA mv_current_page TYPE i.
     DATA mv_current_font TYPE string.
@@ -275,6 +316,7 @@ CLASS zcl_open_abap_pdf DEFINITION PUBLIC.
     DATA mv_nb_alias TYPE string.
     DATA mo_layout TYPE REF TO zif_open_abap_pdf_layout.
     DATA mv_in_layout TYPE abap_bool.
+    DATA mv_hex_images TYPE abap_bool.
 
     METHODS add_object
       IMPORTING iv_content   TYPE string
@@ -309,6 +351,9 @@ CLASS zcl_open_abap_pdf DEFINITION PUBLIC.
 
     METHODS build_objects
       RETURNING VALUE(rv_catalog_id) TYPE i.
+
+    METHODS build_images
+      RETURNING VALUE(rv_xobjects) TYPE string.
 
     METHODS emit_page_state.
 
@@ -370,6 +415,46 @@ CLASS zcl_open_abap_pdf IMPLEMENTATION.
     ro_pdf = me.
   ENDMETHOD.
 
+  METHOD image.
+    DATA ls_image TYPE ty_image.
+    DATA lv_width TYPE f.
+    DATA lv_height TYPE f.
+
+    ls_image-info = zcl_open_abap_pdf_image=>parse( iv_data ).
+    ls_image-id = lines( mt_images ) + 1.
+    APPEND ls_image TO mt_images.
+
+    DATA(lv_natural_w) = ls_image-info-width * 72 / iv_dpi.
+    DATA(lv_natural_h) = ls_image-info-height * 72 / iv_dpi.
+
+    lv_width = iv_width.
+    lv_height = iv_height.
+    IF lv_width <= 0 AND lv_height <= 0.
+      lv_width = lv_natural_w.
+      lv_height = lv_natural_h.
+    ELSEIF lv_width <= 0.
+      lv_width = lv_height * lv_natural_w / lv_natural_h.
+    ELSEIF lv_height <= 0.
+      lv_height = lv_width * lv_natural_h / lv_natural_w.
+    ENDIF.
+
+    append_to_page( |q { format_number( lv_width ) } 0 0 { format_number( lv_height ) } | &&
+      |{ format_number( iv_x ) } { format_number( transform_y( iv_y + lv_height ) ) } cm | &&
+      |/Im{ ls_image-id } Do Q| ).
+
+    ro_pdf = me.
+  ENDMETHOD.
+
+  METHOD image_base64.
+    ro_pdf = image(
+      iv_data   = cl_http_utility=>decode_x_base64( iv_base64 )
+      iv_x      = iv_x
+      iv_y      = iv_y
+      iv_width  = iv_width
+      iv_height = iv_height
+      iv_dpi    = iv_dpi ).
+  ENDMETHOD.
+
   METHOD emit_page_state.
     ensure_font( mv_current_font ).
     append_to_page( |/F{ get_font_id( mv_current_font ) } { format_number( mv_current_font_size ) } Tf| ).
@@ -404,6 +489,11 @@ CLASS zcl_open_abap_pdf IMPLEMENTATION.
 
   METHOD set_layout.
     mo_layout = io_layout.
+    ro_pdf = me.
+  ENDMETHOD.
+
+  METHOD set_hex_images.
+    mv_hex_images = iv_active.
     ro_pdf = me.
   ENDMETHOD.
 
@@ -729,6 +819,8 @@ CLASS zcl_open_abap_pdf IMPLEMENTATION.
     DATA lv_saved_page TYPE i.
     DATA lv_page_ids TYPE string.
     DATA lv_font_resources TYPE string.
+    DATA lv_xobjects TYPE string.
+    DATA lv_resources TYPE string.
     DATA ls_page TYPE ty_page.
     DATA ls_font TYPE ty_font.
     DATA lv_stream TYPE string.
@@ -771,10 +863,17 @@ CLASS zcl_open_abap_pdf IMPLEMENTATION.
       lv_font_resources = lv_font_resources && |/F{ ls_font-id } { ls_font-obj_id } 0 R|.
     ENDLOOP.
 
+    lv_xobjects = build_images( ).
+
     " Add page objects
+    lv_resources = |/Font << { lv_font_resources } >>|.
+    IF lv_xobjects IS NOT INITIAL.
+      lv_resources = |{ lv_resources } /XObject << { lv_xobjects } >>|.
+    ENDIF.
+
     lv_pages_id = mv_next_obj_id + lines( mt_pages ).
     LOOP AT mt_pages INTO ls_page.
-      lv_obj_id = add_object( |<< /Type /Page /Parent { lv_pages_id } 0 R /MediaBox [0 0 { format_number( ls_page-width ) } { format_number( ls_page-height ) }] /Contents { ls_page-content_id } 0 R /Resources << /Font << { lv_font_resources } >> >> >>| ).
+      lv_obj_id = add_object( |<< /Type /Page /Parent { lv_pages_id } 0 R /MediaBox [0 0 { format_number( ls_page-width ) } { format_number( ls_page-height ) }] /Contents { ls_page-content_id } 0 R /Resources << { lv_resources } >> >>| ).
 
       IF lv_page_ids IS NOT INITIAL.
         lv_page_ids = lv_page_ids && | |.
@@ -787,6 +886,60 @@ CLASS zcl_open_abap_pdf IMPLEMENTATION.
 
     " Add catalog
     rv_catalog_id = add_object( |<< /Type /Catalog /Pages { lv_pages_id } 0 R >>| ).
+  ENDMETHOD.
+
+  METHOD build_images.
+    DATA ls_image TYPE ty_image.
+    DATA lv_colorspace TYPE string.
+    DATA lv_dict TYPE string.
+    DATA lv_filter TYPE string.
+    DATA lv_data TYPE xstring.
+
+    LOOP AT mt_images INTO ls_image.
+      lv_colorspace = ls_image-info-colorspace.
+      lv_filter = ls_image-info-filter.
+      lv_data = ls_image-info-data.
+      DATA(lv_palette) = ls_image-info-palette.
+
+      IF mv_hex_images = abap_true.
+        lv_filter = |[/ASCIIHexDecode { ls_image-info-filter }]|.
+        lv_data = cl_abap_codepage=>convert_to( |{ lv_data }>| ).
+        IF lv_palette IS NOT INITIAL.
+          lv_palette = cl_abap_codepage=>convert_to( |{ lv_palette }>| ).
+        ENDIF.
+      ENDIF.
+
+      IF lv_colorspace = '/Indexed'.
+        IF mv_hex_images = abap_true.
+          ls_image-pal_id = add_stream_object(
+            iv_dict = '<< /Filter /ASCIIHexDecode'
+            iv_data = lv_palette ).
+        ELSE.
+          ls_image-pal_id = add_stream_object( iv_data = lv_palette ).
+        ENDIF.
+        lv_colorspace = |[/Indexed /DeviceRGB { xstrlen( ls_image-info-palette ) / 3 - 1 } | &&
+                        |{ ls_image-pal_id } 0 R]|.
+      ENDIF.
+
+      lv_dict = |<< /Type /XObject /Subtype /Image /Width { ls_image-info-width } | &&
+                |/Height { ls_image-info-height } /ColorSpace { lv_colorspace } | &&
+                |/BitsPerComponent { ls_image-info-bpc } /Filter { lv_filter }|.
+      IF ls_image-info-decode_parms IS NOT INITIAL.
+        IF mv_hex_images = abap_true.
+          lv_dict = |{ lv_dict } /DecodeParms [null { ls_image-info-decode_parms }]|.
+        ELSE.
+          lv_dict = |{ lv_dict } /DecodeParms { ls_image-info-decode_parms }|.
+        ENDIF.
+      ENDIF.
+
+      ls_image-obj_id = add_stream_object( iv_dict = lv_dict iv_data = lv_data ).
+      MODIFY mt_images FROM ls_image INDEX sy-tabix.
+
+      IF rv_xobjects IS NOT INITIAL.
+        rv_xobjects = rv_xobjects && | |.
+      ENDIF.
+      rv_xobjects = rv_xobjects && |/Im{ ls_image-id } { ls_image-obj_id } 0 R|.
+    ENDLOOP.
   ENDMETHOD.
 
   METHOD render.
