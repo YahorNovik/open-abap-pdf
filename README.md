@@ -12,13 +12,58 @@ Plan is to have the same code run on:
 
 ## Features
 
-- Create multi-page PDF documents
-- Add text with customizable fonts (Helvetica, Times-Roman, Courier)
+- Create multi-page PDF documents, byte exact xref table, no repair needed by readers
+- Text with the 12 Base-14 text fonts, real AFM metrics, WinAnsi encoding for umlauts and the Euro sign
+- Text measuring, word wrap, left / center / right alignment
+- Layout engine: margins, cursor, `cell`, `multi_cell`, automatic page break, header and footer callbacks, total page count placeholder
+- Tables with column widths, wrapping cells, zebra shading, borders and a header row that repeats after a page break
+- Images: JPEG (DCTDecode) and PNG (FlateDecode), scaling, dpi, raw or ASCII hex streams
+- Interactive forms (AcroForm): text fields, check boxes, radio groups, drop downs, plus a flatten mode that draws the values as static text
 - Set text, draw, and fill colors (RGB)
 - Draw shapes: lines, rectangles, circles
 - Fluent API for method chaining
 - Support for A4, Letter, and custom page sizes
 - Unit conversion helpers (mm to points, inches to points)
+
+## Classes
+
+| Class | Purpose |
+|-------|---------|
+| `zcl_open_abap_pdf` | Document, pages, drawing, layout, images, form fields |
+| `zcl_open_abap_pdf_table` | Tables |
+| `zcl_open_abap_pdf_font` | Text width, word wrap, PDF string escaping |
+| `zcl_open_abap_pdf_metrics` | Generated Base-14 glyph widths |
+| `zcl_open_abap_pdf_image` | JPEG and PNG parsing |
+| `zcl_open_abap_pdf_writer` | Byte safe output buffer |
+| `zif_open_abap_pdf_layout` | Header and footer callbacks |
+| `zcx_open_abap_pdf` | Exception |
+
+## Generate, preview, edit, repeat
+
+The repository transpiles itself to Node with the abaplint transpiler, so a document can be
+rendered and inspected without an SAP system:
+
+```bash
+npm install
+pip install pymupdf
+
+./preview.sh ZCL_PDF_DEMO_TABLE run_base64 tables.pdf preview_tables
+```
+
+`preview.sh` transpiles the ABAP, runs the given class method (which must return the document as
+base64), writes the PDF and rasterizes every page to `preview_tables/page_NN.png` plus a
+`text.txt` with the extracted text. `tools/validate.py` additionally asserts that the file is
+structurally valid, which is also part of `npm test`.
+
+Demo classes in `test/`:
+
+| Class | Shows |
+|-------|-------|
+| `ZCL_PDF_DEMO` | text, fonts, shapes |
+| `ZCL_PDF_DEMO_LAYOUT` | margins, wrapped text, page break, header and footer |
+| `ZCL_PDF_DEMO_TABLE` | delivery note with a long table |
+| `ZCL_PDF_DEMO_IMAGE` | JPEG and PNG placement |
+| `ZCL_PDF_DEMO_FORM` | fillable form and its flattened copy |
 
 ## Usage
 
@@ -64,6 +109,64 @@ lo_pdf->circle( iv_x = 300 iv_y = 200 iv_radius = 40 iv_style = 'DF' ).
 
 DATA(lv_pdf) = lo_pdf->render( ).
 ```
+
+### Layout, wrapped text and pagination
+
+```abap
+DATA(lo_pdf) = zcl_open_abap_pdf=>create( ).
+lo_pdf->set_margins( iv_left = 40 iv_top = 40 iv_right = 40 iv_bottom = 40 ).
+lo_pdf->set_layout( NEW zcl_my_layout( ) ).   " header( ) and footer( ) callbacks
+lo_pdf->add_page( ).
+
+lo_pdf->cell( iv_text = 'Heading' iv_height = 24 ).
+lo_pdf->multi_cell( iv_text = lv_long_text ).       " wraps and breaks pages
+lo_pdf->cell( iv_text = 'Sum' iv_align = zcl_open_abap_pdf=>c_align_right iv_border = '1' ).
+```
+
+In a footer, `{nb}` is replaced by the total number of pages:
+
+```abap
+io_pdf->cell( iv_text = |Page { io_pdf->get_page_number( ) } of \{nb\}| ).
+```
+
+### Tables
+
+```abap
+zcl_open_abap_pdf_table=>create( lo_pdf
+  )->add_column( iv_header = 'Item' iv_width = 40 iv_align = zcl_open_abap_pdf=>c_align_right
+  )->add_column( iv_header = 'Description'
+  )->add_column( iv_header = 'Value' iv_width = 80 iv_align = zcl_open_abap_pdf=>c_align_right
+  )->set_zebra(
+  )->add_row( VALUE #( ( '10' ) ( 'Ball bearing 6204-2RS' ) ( '17.85 EUR' ) )
+  )->add_row( it_cells = VALUE #( ( '' ) ( 'Total' ) ( '17.85 EUR' ) ) iv_bold = abap_true
+  )->render( ).
+```
+
+### Images
+
+```abap
+lo_pdf->image( iv_data = lv_jpeg_xstring iv_x = 40 iv_y = 40 iv_width = 120 ).
+lo_pdf->image_base64( iv_base64 = lv_png_base64 iv_x = 40 iv_y = 40 iv_dpi = 300 ).
+```
+
+JPEG is embedded as is, PNG must be saved without an alpha channel and without interlacing.
+
+### Interactive forms
+
+```abap
+lo_pdf->text_field( iv_name = 'EMPLOYEE' iv_x = 190 iv_y = 100 iv_width = 250 iv_value = 'Lars Hvam' ).
+lo_pdf->checkbox( iv_name = 'ADVANCE' iv_x = 190 iv_y = 130 iv_checked = abap_true ).
+lo_pdf->radio_button( iv_name = 'LEVEL' iv_value = 'Manager' iv_x = 190 iv_y = 160 iv_selected = abap_true ).
+lo_pdf->radio_button( iv_name = 'LEVEL' iv_value = 'Director' iv_x = 300 iv_y = 160 ).
+lo_pdf->dropdown(
+  iv_name    = 'TRIP_TYPE'
+  it_options = VALUE #( ( 'Domestic' ) ( 'International' ) )
+  iv_x       = 190
+  iv_y       = 190
+  iv_width   = 160 ).
+```
+
+`set_flatten_form( )` draws the same layout without widgets, for the archive copy.
 
 ### Multiple Pages
 
@@ -118,8 +221,26 @@ lo_pdf->add_page(
 | `line( iv_x1, iv_y1, iv_x2, iv_y2 )` | Draws a line |
 | `rect( iv_x, iv_y, iv_width, iv_height, iv_style )` | Draws a rectangle |
 | `circle( iv_x, iv_y, iv_radius, iv_style )` | Draws a circle |
-| `render( )` | Returns PDF as string |
-| `render_binary( )` | Returns PDF as xstring |
+| `cell( iv_text, iv_width, iv_height, iv_align, iv_border, iv_fill, iv_ln )` | Single line text box at the cursor |
+| `multi_cell( iv_text, iv_width, iv_height, iv_align, iv_border )` | Wrapped text block, breaks pages |
+| `set_margins( iv_left, iv_top, iv_right, iv_bottom )` | Page margins |
+| `set_auto_page_break( iv_active, iv_margin )` | Automatic page break |
+| `set_layout( io_layout )` | Header and footer callbacks |
+| `set_alias_nb_pages( iv_alias )` | Placeholder for the total page count, default `{nb}` |
+| `set_line_height( iv_height )` | Default line height |
+| `set_xy( ) / set_x( ) / set_y( ) / get_x( ) / get_y( ) / ln( )` | Cursor |
+| `get_content_width( )` | Width between the margins |
+| `get_page_number( )` | Current page number |
+| `get_text_width( iv_text, iv_font, iv_size )` | Text width in points |
+| `check_page_break( iv_height )` | Break if the height does not fit |
+| `image( iv_data, iv_x, iv_y, iv_width, iv_height, iv_dpi )` | Place a JPEG or PNG |
+| `image_base64( iv_base64, ... )` | Place a base64 encoded image |
+| `set_hex_images( iv_active )` | Write image streams as ASCII hex |
+| `text_field( )`, `checkbox( )`, `radio_button( )`, `dropdown( )` | Interactive form fields |
+| `set_flatten_form( iv_active )` | Draw fields as static boxes |
+| `get_field_count( )` | Number of interactive fields |
+| `render( )` | Returns PDF as string, use only without raw image bytes |
+| `render_binary( )` | Returns PDF as xstring, always correct |
 | `get_page_count( )` | Returns number of pages |
 | `get_page_width( )` | Returns current page width |
 | `get_page_height( )` | Returns current page height |
@@ -144,6 +265,18 @@ lo_pdf->add_page(
 
 ## Supported Fonts
 
-- Helvetica (default)
-- Times-Roman
-- Courier
+All widths come from the Adobe AFM metrics, so `get_text_width( )`, word wrap and table layout
+are exact:
+
+- Helvetica, Helvetica-Bold, Helvetica-Oblique, Helvetica-BoldOblique
+- Times-Roman, Times-Bold, Times-Italic, Times-BoldItalic
+- Courier, Courier-Bold, Courier-Oblique, Courier-BoldOblique
+
+Text is encoded as WinAnsi, so Latin-1 characters and the typographic specials (Euro sign, dashes,
+quotes) are written correctly. Unsupported characters become a question mark.
+
+Regenerate the metrics with:
+
+```bash
+python3 tools/gen_font_metrics.py src/zcl_open_abap_pdf_metrics.clas.abap
+```
