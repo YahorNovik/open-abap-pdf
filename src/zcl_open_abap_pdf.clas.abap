@@ -9,8 +9,10 @@ CLASS zcl_open_abap_pdf DEFINITION PUBLIC.
       ty_fonts TYPE STANDARD TABLE OF ty_font WITH DEFAULT KEY,
 
       BEGIN OF ty_object,
-        id      TYPE i,
-        content TYPE string,
+        id        TYPE i,
+        content   TYPE string,
+        stream    TYPE xstring,
+        is_stream TYPE abap_bool,
       END OF ty_object,
       ty_objects TYPE STANDARD TABLE OF ty_object WITH DEFAULT KEY,
 
@@ -156,6 +158,11 @@ CLASS zcl_open_abap_pdf DEFINITION PUBLIC.
       IMPORTING iv_content   TYPE string
       RETURNING VALUE(rv_id) TYPE i.
 
+    METHODS add_stream_object
+      IMPORTING iv_dict      TYPE string DEFAULT '<<'
+                iv_data      TYPE xstring
+      RETURNING VALUE(rv_id) TYPE i.
+
     METHODS escape_string
       IMPORTING iv_text           TYPE string
       RETURNING VALUE(rv_escaped) TYPE string.
@@ -177,6 +184,9 @@ CLASS zcl_open_abap_pdf DEFINITION PUBLIC.
 
     METHODS append_to_page
       IMPORTING iv_content TYPE string.
+
+    METHODS build_objects
+      RETURNING VALUE(rv_catalog_id) TYPE i.
 ENDCLASS.
 
 CLASS zcl_open_abap_pdf IMPLEMENTATION.
@@ -320,26 +330,15 @@ CLASS zcl_open_abap_pdf IMPLEMENTATION.
     ro_pdf = me.
   ENDMETHOD.
 
-  METHOD render.
-    DATA lv_pdf TYPE string.
-    DATA lv_catalog_id TYPE i.
+  METHOD build_objects.
     DATA lv_pages_id TYPE i.
     DATA lv_page_ids TYPE string.
     DATA lv_font_resources TYPE string.
-    DATA lv_xref TYPE string.
-    DATA lv_startxref TYPE i.
     DATA ls_page TYPE ty_page.
     DATA ls_font TYPE ty_font.
-    DATA ls_object TYPE ty_object.
-    DATA lv_obj_count TYPE i.
-    DATA lv_content_length TYPE i.
     DATA lv_stream TYPE string.
-    DATA lt_offsets TYPE STANDARD TABLE OF i WITH DEFAULT KEY.
-    DATA lv_offset_val TYPE i.
-    DATA lv_offset_str TYPE string.
     DATA lv_page_tabix TYPE i.
     DATA lv_obj_id TYPE i.
-    DATA lv_marker TYPE string.
 
     " Reset objects for fresh render
     CLEAR mt_objects.
@@ -364,8 +363,7 @@ CLASS zcl_open_abap_pdf IMPLEMENTATION.
       ENDIF.
       lv_stream = lv_stream && ls_page-content.
 
-      lv_content_length = strlen( lv_stream ).
-      ls_page-content_id = add_object( |<< /Length { lv_content_length } >>\nstream\n{ lv_stream }\nendstream| ).
+      ls_page-content_id = add_stream_object( iv_data = cl_abap_codepage=>convert_to( lv_stream ) ).
       MODIFY mt_pages FROM ls_page INDEX lv_page_tabix.
     ENDLOOP.
 
@@ -392,39 +390,59 @@ CLASS zcl_open_abap_pdf IMPLEMENTATION.
     lv_pages_id = add_object( |<< /Type /Pages /Kids [{ lv_page_ids }] /Count { lines( mt_pages ) } >>| ).
 
     " Add catalog
-    lv_catalog_id = add_object( |<< /Type /Catalog /Pages { lv_pages_id } 0 R >>| ).
+    rv_catalog_id = add_object( |<< /Type /Catalog /Pages { lv_pages_id } 0 R >>| ).
+  ENDMETHOD.
 
-    " Build PDF header with binary marker (high-bit chars indicate binary content)
-    lv_marker = cl_abap_codepage=>convert_from( CONV xstring( 'C2B5C2B6' ) ).
-    lv_pdf = |%PDF-1.4\n%| && lv_marker && |\n|.
+  METHOD render.
+    rv_pdf = cl_abap_codepage=>convert_from( render_binary( ) ).
+  ENDMETHOD.
 
-    " Write objects and track offsets
+  METHOD render_binary.
+    DATA lo_writer TYPE REF TO zcl_open_abap_pdf_writer.
+    DATA ls_object TYPE ty_object.
+    DATA lt_offsets TYPE STANDARD TABLE OF i WITH DEFAULT KEY.
+    DATA lv_offset_val TYPE i.
+    DATA lv_offset_str TYPE string.
+    DATA lv_obj_count TYPE i.
+    DATA lv_startxref TYPE i.
+
+    DATA(lv_catalog_id) = build_objects( ).
+
+    CREATE OBJECT lo_writer.
+
+    " Header, with binary marker so readers treat the file as binary
+    lo_writer->add_string( |%PDF-1.4\n%| ).
+    lo_writer->add_xstring( CONV xstring( 'C2B5C2B6' ) ).
+    lo_writer->add_string( |\n| ).
+
+    " Objects, tracking byte offsets for the xref table
     LOOP AT mt_objects INTO ls_object.
-      APPEND strlen( lv_pdf ) TO lt_offsets.
-      lv_pdf = lv_pdf && |{ ls_object-id } 0 obj\n{ ls_object-content }\nendobj\n|.
+      APPEND lo_writer->length( ) TO lt_offsets.
+      lo_writer->add_string( |{ ls_object-id } 0 obj\n{ ls_object-content }\n| ).
+      IF ls_object-is_stream = abap_true.
+        lo_writer->add_string( |stream\n| ).
+        lo_writer->add_xstring( ls_object-stream ).
+        lo_writer->add_string( |\nendstream\n| ).
+      ENDIF.
+      lo_writer->add_string( |endobj\n| ).
     ENDLOOP.
 
     " Cross-reference table
-    lv_startxref = strlen( lv_pdf ).
+    lv_startxref = lo_writer->length( ).
     lv_obj_count = lines( mt_objects ) + 1.
-    lv_xref = |xref\n0 { lv_obj_count }\n0000000000 65535 f \n|.
+    lo_writer->add_string( |xref\n0 { lv_obj_count }\n0000000000 65535 f \n| ).
 
     LOOP AT lt_offsets INTO lv_offset_val.
       lv_offset_str = |{ lv_offset_val }|.
       WHILE strlen( lv_offset_str ) < 10.
         lv_offset_str = '0' && lv_offset_str.
       ENDWHILE.
-      lv_xref = lv_xref && |{ lv_offset_str } 00000 n \n|.
+      lo_writer->add_string( |{ lv_offset_str } 00000 n \n| ).
     ENDLOOP.
 
-    lv_pdf = lv_pdf && lv_xref.
-    lv_pdf = lv_pdf && |trailer\n<< /Size { lv_obj_count } /Root { lv_catalog_id } 0 R >>\nstartxref\n{ lv_startxref }\n%%EOF|.
+    lo_writer->add_string( |trailer\n<< /Size { lv_obj_count } /Root { lv_catalog_id } 0 R >>\nstartxref\n{ lv_startxref }\n%%EOF| ).
 
-    rv_pdf = lv_pdf.
-  ENDMETHOD.
-
-  METHOD render_binary.
-    rv_pdf = cl_abap_codepage=>convert_to( render( ) ).
+    rv_pdf = lo_writer->get( ).
   ENDMETHOD.
 
   METHOD get_page_count.
@@ -459,6 +477,17 @@ CLASS zcl_open_abap_pdf IMPLEMENTATION.
     DATA(ls_object) = VALUE ty_object(
         id = mv_next_obj_id
         content = iv_content ).
+    APPEND ls_object TO mt_objects.
+    mv_next_obj_id = mv_next_obj_id + 1.
+    rv_id = ls_object-id.
+  ENDMETHOD.
+
+  METHOD add_stream_object.
+    DATA(ls_object) = VALUE ty_object(
+        id = mv_next_obj_id
+        content = |{ iv_dict } /Length { xstrlen( iv_data ) } >>|
+        stream = iv_data
+        is_stream = abap_true ).
     APPEND ls_object TO mt_objects.
     mv_next_obj_id = mv_next_obj_id + 1.
     rv_id = ls_object-id.
