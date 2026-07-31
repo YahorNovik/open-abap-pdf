@@ -5,9 +5,10 @@ CLASS zcl_open_abap_pdf_table DEFINITION PUBLIC FINAL CREATE PRIVATE.
 
     TYPES:
       BEGIN OF ty_column,
-        header TYPE string,
-        width  TYPE f,
-        align  TYPE string,
+        header       TYPE string,
+        width        TYPE f,
+        align        TYPE string,
+        header_align TYPE string,
       END OF ty_column,
       ty_columns TYPE STANDARD TABLE OF ty_column WITH DEFAULT KEY,
 
@@ -25,10 +26,12 @@ CLASS zcl_open_abap_pdf_table DEFINITION PUBLIC FINAL CREATE PRIVATE.
     "! Add a column
     "! @parameter iv_width | Column width in points, 0 shares out the remaining width
     "! @parameter iv_align | L, C or R
+    "! @parameter iv_header_align | Alignment of the header cell, defaults to iv_align
     METHODS add_column
       IMPORTING iv_header       TYPE string DEFAULT ''
                 iv_width        TYPE f DEFAULT 0
                 iv_align        TYPE string DEFAULT 'L'
+                iv_header_align TYPE string DEFAULT ''
       RETURNING VALUE(ro_table) TYPE REF TO zcl_open_abap_pdf_table.
 
     "! Add a data row, cells are matched to the columns by position
@@ -104,6 +107,7 @@ CLASS zcl_open_abap_pdf_table DEFINITION PUBLIC FINAL CREATE PRIVATE.
                 iv_font   TYPE string
                 iv_size   TYPE f
                 iv_fill   TYPE abap_bool
+                iv_header TYPE abap_bool DEFAULT abap_false
                 iv_r      TYPE i DEFAULT 255
                 iv_g      TYPE i DEFAULT 255
                 iv_b      TYPE i DEFAULT 255.
@@ -138,10 +142,16 @@ CLASS zcl_open_abap_pdf_table IMPLEMENTATION.
   ENDMETHOD.
 
   METHOD add_column.
+    DATA(lv_header_align) = iv_header_align.
+    IF lv_header_align IS INITIAL.
+      lv_header_align = iv_align.
+    ENDIF.
+
     APPEND VALUE ty_column(
-      header = iv_header
-      width  = iv_width
-      align  = iv_align ) TO mt_columns.
+      header       = iv_header
+      width        = iv_width
+      align        = iv_align
+      header_align = lv_header_align ) TO mt_columns.
     ro_table = me.
   ENDMETHOD.
 
@@ -281,6 +291,11 @@ CLASS zcl_open_abap_pdf_table IMPLEMENTATION.
         iv_fill   = iv_fill
         iv_ln     = abap_false ).
 
+      DATA(lv_align) = ls_column-align.
+      IF iv_header = abap_true.
+        lv_align = ls_column-header_align.
+      ENDIF.
+
       LOOP AT zcl_open_abap_pdf_font=>wrap(
                 iv_font  = iv_font
                 iv_size  = iv_size
@@ -293,7 +308,7 @@ CLASS zcl_open_abap_pdf_table IMPLEMENTATION.
           iv_text    = lv_line
           iv_width   = lv_width
           iv_height  = mv_line_height
-          iv_align   = ls_column-align
+          iv_align   = lv_align
           iv_padding = mv_padding
           iv_ln      = abap_false ).
       ENDLOOP.
@@ -322,6 +337,7 @@ CLASS zcl_open_abap_pdf_table IMPLEMENTATION.
       iv_font   = mv_header_font
       iv_size   = mv_header_size
       iv_fill   = abap_true
+      iv_header = abap_true
       iv_r      = mv_header_r
       iv_g      = mv_header_g
       iv_b      = mv_header_b ).

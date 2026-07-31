@@ -23,6 +23,18 @@ def png_rgb(width, height):
             + chunk(b"IDAT", zlib.compress(bytes(raw), 9)) + chunk(b"IEND", b""))
 
 
+def logo_png(size=96):
+    import fitz
+    doc = fitz.open()
+    page = doc.new_page(width=size, height=size)
+    page.draw_rect(fitz.Rect(0, 0, size, size), fill=(0.13, 0.42, 0.73), color=(0.13, 0.42, 0.73))
+    page.draw_rect(fitz.Rect(size * 0.08, size * 0.08, size * 0.92, size * 0.92),
+                   fill=(0.20, 0.52, 0.84), color=(0.20, 0.52, 0.84))
+    page.insert_text((size * 0.18, size * 0.78), "W", fontsize=size * 0.75,
+                     fontname="hebo", color=(1, 1, 1))
+    return page.get_pixmap(dpi=144).tobytes("png")
+
+
 def jpeg_rgb(width, height):
     import fitz
     pix = fitz.Pixmap(fitz.csRGB, fitz.IRect(0, 0, width, height))
@@ -47,10 +59,14 @@ def main():
     png = png_rgb(48, 32)
     jpg = jpeg_rgb(64, 48)
 
+    logo = logo_png()
+
     body = io.StringIO()
     abap_literal("png", png, body)
     body.write("\n")
     abap_literal("jpeg", jpg, body)
+    body.write("\n")
+    abap_literal("logo", logo, body)
 
     with open(target, "w") as f:
         f.write("CLASS zcl_pdf_test_images DEFINITION PUBLIC FINAL CREATE PRIVATE.\n")
@@ -59,12 +75,14 @@ def main():
         f.write('    "! 48x32 RGB PNG, base64\n')
         f.write("    CLASS-METHODS png\n      RETURNING VALUE(rv_base64) TYPE string.\n\n")
         f.write('    "! 64x48 RGB JPEG, base64\n')
-        f.write("    CLASS-METHODS jpeg\n      RETURNING VALUE(rv_base64) TYPE string.\n")
+        f.write("    CLASS-METHODS jpeg\n      RETURNING VALUE(rv_base64) TYPE string.\n\n")
+        f.write('    "! Square placeholder logo as RGB PNG, base64\n')
+        f.write("    CLASS-METHODS logo\n      RETURNING VALUE(rv_base64) TYPE string.\n")
         f.write("ENDCLASS.\n\n")
         f.write("CLASS zcl_pdf_test_images IMPLEMENTATION.\n\n")
         f.write(body.getvalue())
         f.write("\nENDCLASS.\n")
-    print("written %s (png %d bytes, jpeg %d bytes)" % (target, len(png), len(jpg)))
+    print("written %s (png %d, jpeg %d, logo %d bytes)" % (target, len(png), len(jpg), len(logo)))
 
 
 if __name__ == "__main__":
