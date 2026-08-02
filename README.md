@@ -14,12 +14,15 @@ Plan is to have the same code run on:
 
 - Create multi-page PDF documents, byte exact xref table, no repair needed by readers
 - Text with the 12 Base-14 text fonts, real AFM metrics, WinAnsi encoding for umlauts and the Euro sign
-- Text measuring, word wrap, left / center / right alignment
+- Text measuring, word wrap, left / center / right / justified alignment
 - Layout engine: margins, cursor, `cell`, `multi_cell`, automatic page break, header and footer callbacks, total page count placeholder
 - Tables with column widths, wrapping cells, zebra shading, borders, a header row that repeats after a page break, full width group and subtotal rows, and keep with next so a group header never ends a page
 - Images: JPEG (DCTDecode) and PNG (FlateDecode), scaling, dpi, raw or ASCII hex streams
 - Optional FlateDecode compression of content, fonts and ToUnicode maps, typically a fifth of the size
 - Interactive forms (AcroForm): text fields, check boxes, radio groups, drop downs, plus a flatten mode that draws the values as static text
+- Read the field values back out of a filled form, also when a reader saved it into compressed object streams
+- Barcodes: Code 128 code set B and QR codes, both drawn as vector rectangles, no image needed
+- PDF/A-3 with attachments, which is what a hybrid electronic invoice such as ZUGFeRD or Factur-X needs
 - Set text, draw, and fill colors (RGB)
 - Draw shapes: lines, rectangles, circles
 - Fluent API for method chaining
@@ -37,6 +40,9 @@ Plan is to have the same code run on:
 | `zcl_open_abap_pdf_image` | JPEG and PNG parsing |
 | `zcl_open_abap_pdf_writer` | Byte safe output buffer |
 | `zcl_open_abap_pdf_ttf` | TrueType font parsing |
+| `zcl_open_abap_pdf_barcode` | Code 128 module pattern |
+| `zcl_open_abap_pdf_qr` | QR code encoder, Reed-Solomon, masking |
+| `zcl_open_abap_pdf_reader` | Read form values and the page count out of a PDF |
 | `zif_open_abap_pdf_layout` | Header and footer callbacks |
 | `zcx_open_abap_pdf` | Exception |
 
@@ -69,6 +75,8 @@ Demo classes in `test/`:
 | `ZCL_PDF_DEMO_INVOICE` | replica of a Polish VAT invoice, logo, VAT summary |
 | `ZCL_PDF_DEMO_TTF` | embedded TrueType font with Polish, Czech, Turkish, Cyrillic and Greek text |
 | `ZCL_PDF_DEMO_PDFA` | archive copy as PDF/A-1b, plus a deliberate rule violation |
+| `ZCL_PDF_DEMO_CODES` | Code 128 and QR codes, including a payment QR and a label |
+| `ZCL_PDF_DEMO_HYBRID` | hybrid invoice as PDF/A-3 with factur-x.xml attached, and a form round trip |
 | `ZCL_PDF_DEMO_COMPLEX` | order confirmation: letterhead, address window, info grid, grouped item table with subtotals over several pages, totals box, bar chart, two column terms, rotated watermark, signatures |
 
 ## Usage
@@ -127,6 +135,12 @@ lo_pdf->add_page( ).
 lo_pdf->cell( iv_text = 'Heading' iv_height = 24 ).
 lo_pdf->multi_cell( iv_text = lv_long_text ).       " wraps and breaks pages
 lo_pdf->cell( iv_text = 'Sum' iv_align = zcl_open_abap_pdf=>c_align_right iv_border = '1' ).
+
+" Justified text stretches the spaces so both edges line up, as in a letter or
+" a set of terms. The last line of the block keeps its natural spacing.
+lo_pdf->multi_cell(
+  iv_text  = lv_long_text
+  iv_align = zcl_open_abap_pdf=>c_align_justify ).
 ```
 
 In a footer, `{nb}` is replaced by the total number of pages:
@@ -230,6 +244,9 @@ lo_pdf->add_page(
 | `circle( iv_x, iv_y, iv_radius, iv_style )` | Draws a circle |
 | `cell( iv_text, iv_width, iv_height, iv_align, iv_border, iv_fill, iv_ln )` | Single line text box at the cursor |
 | `multi_cell( iv_text, iv_width, iv_height, iv_align, iv_border )` | Wrapped text block, breaks pages |
+| `barcode_128( iv_x, iv_y, iv_text, iv_height, iv_module )` | Code 128 barcode, code set B, with quiet zone |
+| `qrcode( iv_x, iv_y, iv_text, iv_size )` | QR code, error correction level M, with quiet zone |
+| `attach_file( iv_name, iv_data, iv_mime, iv_relation, iv_text )` | Attach a file, needs PDF/A-3 or no PDF/A at all |
 | `cell( ... iv_truncate = abap_true )` | Shortens the text with an ellipsis instead of overflowing |
 | `set_margins( iv_left, iv_top, iv_right, iv_bottom )` | Page margins |
 | `set_auto_page_break( iv_active, iv_margin )` | Automatic page break |
@@ -263,6 +280,10 @@ lo_pdf->add_page(
 
 | Constant | Value | Description |
 |----------|-------|-------------|
+| `c_align_left` | L | Align text left |
+| `c_align_center` | C | Center text |
+| `c_align_right` | R | Align text right |
+| `c_align_justify` | J | Stretch the spaces so both edges line up, except on the last line |
 | `c_pt_per_mm` | 2.83465 | Points per millimeter |
 | `c_a4_width` | 595.28 | A4 width in points |
 | `c_a4_height` | 841.89 | A4 height in points |
@@ -312,6 +333,87 @@ document and `render_pdfa( )` refuses it.
 
 `tools/pdfa_check.py` runs the structural checks that are cheap to verify. It is not a certified
 validator, use veraPDF for a formal statement.
+
+## Barcodes and QR codes
+
+Both are drawn as filled rectangles, so they stay sharp at any zoom and no image library is
+involved. The quiet zone belongs to the symbol and is included in the given size.
+
+```abap
+" Code 128, code set B, every printable ASCII character
+lo_pdf->barcode_128(
+  iv_x      = 40
+  iv_y      = 100
+  iv_text   = '80001234-2026'
+  iv_height = 30
+  iv_module = 0.9 ).      " width of the narrowest bar, total width is ( modules + 20 ) * iv_module
+
+" QR code, error correction level M, up to version 10
+lo_pdf->qrcode(
+  iv_x    = 40
+  iv_y    = 150
+  iv_text = 'https://s4.example.com/sap/bc/ui2/flp#Invoice-display?id=0080004711'
+  iv_size = 110 ).
+```
+
+A payment QR that European banking apps understand is only a text with line breaks:
+
+```abap
+lo_pdf->qrcode(
+  iv_x    = 40
+  iv_y    = 600
+  iv_size = 120
+  iv_text = |BCD\n002\n1\nSCT\nCOBADEFFXXX\nElektronik Grosshandel GmbH\n| &&
+            |DE89370400440532013000\nEUR1785.00\n\n\nInvoice 90001234| ).
+```
+
+The encoders were checked by rendering the pages and decoding the result with a barcode reader,
+not only by comparing bytes: the Code 128 check digit and the QR error correction, mask and format
+information all have to be right, otherwise a scanner rejects the symbol.
+
+## Reading a filled form
+
+A customer opens the form, types into the fields, saves and sends it back. `zcl_open_abap_pdf_reader`
+gets the values out again. It reads the bytes, so a document that a reader saved into compressed
+object streams is unpacked first, and it accepts both `/T (NAME)` and the compact `/T(NAME)`.
+
+```abap
+DATA(lt_fields) = zcl_open_abap_pdf_reader=>read_fields( lv_pdf_from_the_customer ).
+
+LOOP AT lt_fields INTO DATA(ls_field).
+  WRITE: / ls_field-name, ls_field-value.   " EMPLOYEE Anna Weber, ADVANCE Yes, LEVEL Manager
+ENDLOOP.
+
+DATA(lv_pages) = zcl_open_abap_pdf_reader=>page_count( lv_pdf_from_the_customer ).
+```
+
+A check box gives `Yes` or `Off`, a radio group gives the name of the selected button, and a text
+field gives the text with the PDF escaping already removed.
+
+## Hybrid invoice, PDF/A-3 with an attachment
+
+A hybrid electronic invoice is one file with two faces: the page a person reads and the XML the
+accounting system reads. PDF/A-3 allows the attachment, so state part 3 and attach the XML.
+
+```abap
+lo_pdf->set_pdfa(
+  iv_icc   = lv_icc_profile
+  iv_title = 'Invoice 90001234'
+  iv_part  = 3 ).                 " part 1 forbids attachments, part 3 allows them
+
+lo_pdf->attach_file(
+  iv_name     = 'factur-x.xml'    " ZUGFeRD 1.0 uses ZUGFeRD-invoice.xml
+  iv_data     = lv_xml_xstring
+  iv_mime     = 'text/xml'
+  iv_relation = 'Alternative'     " the XML is another form of the same invoice
+  iv_text     = 'Invoice data in Factur-X format' ).
+
+DATA(lv_pdf) = lo_pdf->render_pdfa( ).
+```
+
+The document then carries the file in `/EmbeddedFiles` and in the catalog `/AF`, the header says
+PDF 1.7, and the metadata states both `<pdfaid:part>3</pdfaid:part>` and the invoice profile, so a
+validator and an incoming invoice process both find what they expect.
 
 ## Compression
 

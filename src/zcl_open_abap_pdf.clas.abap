@@ -236,10 +236,24 @@ CLASS zcl_open_abap_pdf DEFINITION PUBLIC.
     "! not allowed and are therefore flattened, and an ICC profile is required for
     "! the output intent. Render with render_pdfa( ) so the rules are checked.
     "! @parameter iv_icc | sRGB ICC profile, in a real system read from SMW0 or a table
+    "! @parameter iv_part | 1 for PDF/A-1b, 3 for PDF/A-3b, which allows attachments
     METHODS set_pdfa
       IMPORTING iv_icc        TYPE xstring
                 iv_title      TYPE string DEFAULT ''
                 iv_author     TYPE string DEFAULT ''
+                iv_part       TYPE i DEFAULT 1
+      RETURNING VALUE(ro_pdf) TYPE REF TO zcl_open_abap_pdf.
+
+    "! Attach a file to the document, which PDF/A-3 allows. This is how a hybrid
+    "! electronic invoice works: the readable invoice plus its XML, for example
+    "! ZUGFeRD or Factur-X with the file name factur-x.xml.
+    "! @parameter iv_relation | Data, Source, Alternative, Supplement or Unspecified
+    METHODS attach_file
+      IMPORTING iv_name       TYPE string
+                iv_data       TYPE xstring
+                iv_mime       TYPE string DEFAULT 'text/xml'
+                iv_relation   TYPE string DEFAULT 'Alternative'
+                iv_text       TYPE string DEFAULT ''
       RETURNING VALUE(ro_pdf) TYPE REF TO zcl_open_abap_pdf.
 
     "! Describe why the document does not fulfil the PDF/A rules, empty when it does
@@ -498,6 +512,20 @@ CLASS zcl_open_abap_pdf DEFINITION PUBLIC.
     DATA mv_title TYPE string.
     DATA mv_author TYPE string.
     DATA mv_info_id TYPE i.
+    DATA mv_pdfa_part TYPE i.
+
+    TYPES:
+      BEGIN OF ty_attachment,
+        name     TYPE string,
+        mime     TYPE string,
+        relation TYPE string,
+        text     TYPE string,
+        data     TYPE xstring,
+        spec_id  TYPE i,
+      END OF ty_attachment,
+      ty_attachments TYPE STANDARD TABLE OF ty_attachment WITH DEFAULT KEY.
+
+    DATA mt_attachments TYPE ty_attachments.
     DATA mv_flatten TYPE abap_bool.
     DATA mt_fields TYPE ty_fields.
 
@@ -533,6 +561,12 @@ CLASS zcl_open_abap_pdf DEFINITION PUBLIC.
 
     METHODS build_metadata
       RETURNING VALUE(rv_meta_id) TYPE i.
+
+    METHODS build_attachments
+      RETURNING VALUE(rv_names_id) TYPE i.
+
+    METHODS attachment_extension
+      RETURNING VALUE(rv_xmp) TYPE string.
 
     METHODS timestamp
       EXPORTING ev_pdf_date TYPE string
@@ -842,8 +876,23 @@ CLASS zcl_open_abap_pdf IMPLEMENTATION.
     ro_pdf = me.
   ENDMETHOD.
 
+  METHOD attach_file.
+    " A PDF name cannot contain a slash, so text/xml is written as text#2Fxml
+    DATA(lv_mime) = iv_mime.
+    REPLACE ALL OCCURRENCES OF '/' IN lv_mime WITH '#2F'.
+
+    APPEND VALUE ty_attachment(
+      name     = iv_name
+      mime     = lv_mime
+      relation = iv_relation
+      text     = iv_text
+      data     = iv_data ) TO mt_attachments.
+    ro_pdf = me.
+  ENDMETHOD.
+
   METHOD set_pdfa.
     mv_pdfa = abap_true.
+    mv_pdfa_part = iv_part.
     mv_icc = iv_icc.
     mv_title = iv_title.
     mv_author = iv_author.
@@ -871,6 +920,11 @@ CLASS zcl_open_abap_pdf IMPLEMENTATION.
 
     IF mt_fields IS NOT INITIAL.
       rv_problem = 'PDF/A does not allow interactive form fields without appearance streams'.
+      RETURN.
+    ENDIF.
+
+    IF mt_attachments IS NOT INITIAL AND mv_pdfa_part <> 3.
+      rv_problem = 'attachments need PDF/A-3, call set_pdfa with iv_part = 3'.
     ENDIF.
   ENDMETHOD.
 
@@ -886,6 +940,53 @@ CLASS zcl_open_abap_pdf IMPLEMENTATION.
     ENDIF.
 
     rv_pdf = render_binary( ).
+  ENDMETHOD.
+
+  METHOD attachment_extension.
+    " A hybrid invoice has to describe its XML in the metadata as well
+    READ TABLE mt_attachments INTO DATA(ls_attachment) INDEX 1.
+    IF sy-subrc <> 0 OR mv_pdfa_part <> 3.
+      RETURN.
+    ENDIF.
+
+    rv_xmp =
+      |  <rdf:Description rdf:about="" xmlns:fx="urn:factur-x:pdfa:CrossIndustryDocument:invoice:1p0#">\n| &&
+      |   <fx:DocumentType>INVOICE</fx:DocumentType>\n| &&
+      |   <fx:DocumentFileName>{ ls_attachment-name }</fx:DocumentFileName>\n| &&
+      |   <fx:Version>1.0</fx:Version>\n| &&
+      |   <fx:ConformanceLevel>BASIC</fx:ConformanceLevel>\n| &&
+      |  </rdf:Description>\n|.
+  ENDMETHOD.
+
+  METHOD build_attachments.
+    DATA ls_attachment TYPE ty_attachment.
+    DATA lv_names TYPE string.
+
+    LOOP AT mt_attachments INTO ls_attachment.
+      DATA(lv_tabix) = sy-tabix.
+
+      DATA(lv_file_id) = add_binary_object(
+        iv_dict = |<< /Type /EmbeddedFile /Subtype /{ ls_attachment-mime } | &&
+                  |/Params << /Size { xstrlen( ls_attachment-data ) } >>|
+        iv_data = ls_attachment-data ).
+
+      ls_attachment-spec_id = add_object(
+        |<< /Type /Filespec /F ({ zcl_open_abap_pdf_font=>escape( ls_attachment-name ) }) | &&
+        |/UF ({ zcl_open_abap_pdf_font=>escape( ls_attachment-name ) }) | &&
+        |/Desc ({ zcl_open_abap_pdf_font=>escape( ls_attachment-text ) }) | &&
+        |/AFRelationship /{ ls_attachment-relation } | &&
+        |/EF << /F { lv_file_id } 0 R /UF { lv_file_id } 0 R >> >>| ).
+      MODIFY mt_attachments FROM ls_attachment INDEX lv_tabix.
+
+      lv_names = |{ lv_names }({ zcl_open_abap_pdf_font=>escape( ls_attachment-name ) }) | &&
+                 |{ ls_attachment-spec_id } 0 R |.
+    ENDLOOP.
+
+    IF lv_names IS INITIAL.
+      RETURN.
+    ENDIF.
+
+    rv_names_id = add_object( |<< /Names [{ lv_names }] >>| ).
   ENDMETHOD.
 
   METHOD build_pdfa_objects.
@@ -944,9 +1045,10 @@ CLASS zcl_open_abap_pdf IMPLEMENTATION.
       |   <pdf:Producer>open-abap-pdf</pdf:Producer>\n| &&
       |  </rdf:Description>\n| &&
       |  <rdf:Description rdf:about="" xmlns:pdfaid="http://www.aiim.org/pdfa/ns/id/">\n| &&
-      |   <pdfaid:part>1</pdfaid:part>\n| &&
+      |   <pdfaid:part>{ mv_pdfa_part }</pdfaid:part>\n| &&
       |   <pdfaid:conformance>B</pdfaid:conformance>\n| &&
       |  </rdf:Description>\n| &&
+      attachment_extension( ) &&
       | </rdf:RDF>\n</x:xmpmeta>\n<?xpacket end="w"?>|.
 
     " The metadata stream stays uncompressed so that a validator can read it directly
@@ -1419,6 +1521,8 @@ CLASS zcl_open_abap_pdf IMPLEMENTATION.
     DATA lv_stream TYPE string.
     DATA lv_page_tabix TYPE i.
     DATA lv_encoding TYPE string.
+    DATA ls_attachment TYPE ty_attachment.
+    DATA lv_af TYPE string.
     DATA lv_field_ids TYPE string.
     DATA lv_annots TYPE string.
     DATA lv_catalog TYPE string.
@@ -1518,12 +1622,22 @@ CLASS zcl_open_abap_pdf IMPLEMENTATION.
       DATA(lv_intent_id) = build_pdfa_objects( ).
       DATA(lv_meta_id) = build_metadata( ).
     ENDIF.
+    DATA(lv_names_id) = build_attachments( ).
 
     " Add catalog, with the interactive form when there are fields
     lv_catalog = |<< /Type /Catalog /Pages { lv_pages_id } 0 R|.
     IF mv_pdfa = abap_true.
       lv_catalog = |{ lv_catalog } /OutputIntents [{ lv_intent_id } 0 R] | &&
                    |/Metadata { lv_meta_id } 0 R|.
+    ENDIF.
+
+    IF lv_names_id > 0.
+      LOOP AT mt_attachments INTO ls_attachment.
+        lv_af = |{ lv_af }{ ls_attachment-spec_id } 0 R |.
+      ENDLOOP.
+
+      lv_catalog = |{ lv_catalog } /AF [{ lv_af }] | &&
+                   |/Names << /EmbeddedFiles { lv_names_id } 0 R >>|.
     ENDIF.
     IF lv_field_ids IS NOT INITIAL.
       READ TABLE mt_fonts INTO ls_font WITH KEY name = 'Helvetica'.
@@ -2013,7 +2127,9 @@ CLASS zcl_open_abap_pdf IMPLEMENTATION.
     CREATE OBJECT lo_writer.
 
     " Header, with binary marker so readers treat the file as binary
-    lo_writer->add_string( |%PDF-1.4\n%| ).
+    " PDF/A-3 builds on PDF 1.7, everything else here stays within 1.4
+    DATA(lv_version) = COND string( WHEN mv_pdfa_part = 3 THEN '1.7' ELSE '1.4' ).
+    lo_writer->add_string( |%PDF-{ lv_version }\n%| ).
     lo_writer->add_xstring( CONV xstring( 'C2B5C2B6' ) ).
     lo_writer->add_string( |\n| ).
 
