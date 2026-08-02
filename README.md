@@ -277,7 +277,18 @@ are exact:
 - Courier, Courier-Bold, Courier-Oblique, Courier-BoldOblique
 
 Text is encoded as WinAnsi, so Latin-1 characters and the typographic specials (Euro sign, dashes,
-quotes) are written correctly. Unsupported characters become a question mark.
+quotes) are written correctly. Unsupported characters become a question mark, which is silent data
+loss, so check the data first:
+
+```abap
+DATA(lv_bad) = zcl_open_abap_pdf_font=>unsupported( ls_customer-name1 ).
+IF lv_bad IS NOT INITIAL.
+  " these characters cannot be printed with a Base-14 font
+ENDIF.
+```
+
+Not covered by WinAnsi: Polish, Czech, Hungarian, Turkish, Baltic, Cyrillic, Greek, Hebrew, Arabic
+and CJK. Those need embedded TrueType fonts, which is not implemented yet.
 
 Regenerate the metrics with:
 

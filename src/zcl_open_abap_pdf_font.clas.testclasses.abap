@@ -11,6 +11,8 @@ CLASS ltcl_font DEFINITION FOR TESTING RISK LEVEL HARMLESS DURATION SHORT.
     METHODS wrap_keeps_newlines FOR TESTING RAISING cx_static_check.
     METHODS wrap_long_word FOR TESTING RAISING cx_static_check.
     METHODS supported FOR TESTING RAISING cx_static_check.
+    METHODS truncate FOR TESTING RAISING cx_static_check.
+    METHODS unsupported_chars FOR TESTING RAISING cx_static_check.
 ENDCLASS.
 
 CLASS ltcl_font IMPLEMENTATION.
@@ -116,6 +118,45 @@ CLASS ltcl_font IMPLEMENTATION.
       iv_width = 60 ).
 
     cl_abap_unit_assert=>assert_true( xsdbool( lines( lt_lines ) > 1 ) ).
+  ENDMETHOD.
+
+  METHOD truncate.
+    DATA(lv_text) = zcl_open_abap_pdf_font=>truncate(
+      iv_font  = 'Helvetica'
+      iv_size  = 10
+      iv_text  = 'A very long material description that does not fit'
+      iv_width = 60 ).
+
+    cl_abap_unit_assert=>assert_char_cp( act = lv_text exp = 'A very*...' ).
+    cl_abap_unit_assert=>assert_true( xsdbool(
+      zcl_open_abap_pdf_font=>text_width(
+        iv_font = 'Helvetica' iv_size = 10 iv_text = lv_text ) <= 60 ) ).
+
+    " Short enough texts are returned unchanged
+    cl_abap_unit_assert=>assert_equals(
+      act = zcl_open_abap_pdf_font=>truncate(
+              iv_font = 'Helvetica' iv_size = 10 iv_text = 'ok' iv_width = 60 )
+      exp = 'ok' ).
+  ENDMETHOD.
+
+  METHOD unsupported_chars.
+    " Latin-1 and the WinAnsi specials are fine
+    cl_abap_unit_assert=>assert_initial(
+      zcl_open_abap_pdf_font=>unsupported(
+        |Gr{ cl_abap_conv_in_ce=>uccp( '00FC' ) }{ cl_abap_conv_in_ce=>uccp( '00DF' ) }e | &&
+        |{ cl_abap_conv_in_ce=>uccp( '20AC' ) } 10| ) ).
+
+    " Polish l with stroke and s with acute cannot be encoded
+    DATA(lv_bad) = zcl_open_abap_pdf_font=>unsupported(
+      |Do zap{ cl_abap_conv_in_ce=>uccp( '0142' ) }aty Ilo{ cl_abap_conv_in_ce=>uccp( '015B' ) }| ).
+
+    cl_abap_unit_assert=>assert_equals(
+      act = strlen( lv_bad )
+      exp = 2
+      msg = 'two distinct characters cannot be encoded' ).
+
+    " A real question mark is not reported
+    cl_abap_unit_assert=>assert_initial( zcl_open_abap_pdf_font=>unsupported( 'why?' ) ).
   ENDMETHOD.
 
   METHOD supported.

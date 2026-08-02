@@ -19,6 +19,13 @@ CLASS zcl_open_abap_pdf_font DEFINITION PUBLIC FINAL CREATE PRIVATE.
                 iv_width        TYPE f
       RETURNING VALUE(rt_lines) TYPE ty_lines.
 
+    "! Characters of iv_text that cannot be encoded and would be printed as a question mark.
+    "! Use it to detect silent data loss before shipping a document, for example customer
+    "! names with Polish, Turkish or Cyrillic letters.
+    CLASS-METHODS unsupported
+      IMPORTING iv_text        TYPE string
+      RETURNING VALUE(rv_char) TYPE string.
+
     "! Shorten a text so that it fits into iv_width, adding an ellipsis
     CLASS-METHODS truncate
       IMPORTING iv_font        TYPE string
@@ -170,6 +177,27 @@ CLASS zcl_open_abap_pdf_font IMPLEMENTATION.
 
       APPEND lv_line TO rt_lines.
     ENDLOOP.
+  ENDMETHOD.
+
+  METHOD unsupported.
+    DATA lv_char TYPE string.
+    DATA lv_offset TYPE i.
+    DATA lt_codes TYPE ty_codes.
+
+    WHILE lv_offset < strlen( iv_text ).
+      lv_char = iv_text+lv_offset(1).
+      lv_offset = lv_offset + 1.
+
+      IF lv_char = '?'.
+        CONTINUE.
+      ENDIF.
+
+      lt_codes = to_codes( lv_char ).
+      READ TABLE lt_codes INTO DATA(lv_code) INDEX 1.
+      IF sy-subrc = 0 AND lv_code = 63 AND rv_char NS lv_char.
+        rv_char = rv_char && lv_char.
+      ENDIF.
+    ENDWHILE.
   ENDMETHOD.
 
   METHOD truncate.
