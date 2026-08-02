@@ -35,6 +35,7 @@ Plan is to have the same code run on:
 | `zcl_open_abap_pdf_metrics` | Generated Base-14 glyph widths |
 | `zcl_open_abap_pdf_image` | JPEG and PNG parsing |
 | `zcl_open_abap_pdf_writer` | Byte safe output buffer |
+| `zcl_open_abap_pdf_ttf` | TrueType font parsing |
 | `zif_open_abap_pdf_layout` | Header and footer callbacks |
 | `zcx_open_abap_pdf` | Exception |
 
@@ -65,6 +66,7 @@ Demo classes in `test/`:
 | `ZCL_PDF_DEMO_IMAGE` | JPEG and PNG placement |
 | `ZCL_PDF_DEMO_FORM` | fillable form and its flattened copy |
 | `ZCL_PDF_DEMO_INVOICE` | replica of a Polish VAT invoice, logo, VAT summary |
+| `ZCL_PDF_DEMO_TTF` | embedded TrueType font with Polish, Czech, Turkish, Cyrillic and Greek text |
 | `ZCL_PDF_DEMO_COMPLEX` | order confirmation: letterhead, address window, info grid, grouped item table with subtotals over several pages, totals box, bar chart, two column terms, rotated watermark, signatures |
 
 ## Usage
@@ -239,7 +241,8 @@ lo_pdf->add_page(
 | `check_page_break( iv_height )` | Break if the height does not fit |
 | `image( iv_data, iv_x, iv_y, iv_width, iv_height, iv_dpi )` | Place a JPEG or PNG |
 | `image_base64( iv_base64, ... )` | Place a base64 encoded image |
-| `set_hex_images( iv_active )` | Write image streams as ASCII hex |
+| `register_font( iv_name, iv_data )` | Embed a TrueType font |
+| `set_hex_streams( iv_active )` | Write images and fonts as ASCII hex |
 | `text_field( )`, `checkbox( )`, `radio_button( )`, `dropdown( )` | Interactive form fields |
 | `set_flatten_form( iv_active )` | Draw fields as static boxes |
 | `get_field_count( )` | Number of interactive fields |
@@ -267,7 +270,34 @@ lo_pdf->add_page(
 | `F` | Fill only |
 | `DF` or `FD` | Draw outline and fill |
 
-## Supported Fonts
+## Embedded TrueType fonts
+
+Any character outside WinAnsi needs an embedded font. Register the ttf once, then use the name
+like a built in font:
+
+```abap
+lo_pdf->register_font( iv_name = 'CompanySans' iv_data = lv_ttf_xstring ).
+lo_pdf->set_font( iv_name = 'CompanySans' iv_size = 11 ).
+lo_pdf->cell( iv_text = lv_polish_text ).
+```
+
+The font is written as a Type0 font with Identity-H encoding, a CIDFontType2 descendant, the real
+glyph widths from the font, and a ToUnicode map so the text stays searchable and copyable. Only
+glyphs that were actually used are described.
+
+In a real system the ttf comes from the MIME repository (SMW0), a table with a RAWSTRING field or
+the ICF, never from the file system, so the same code runs on ABAP Cloud.
+
+Limits of the current implementation:
+
+- the font file is embedded completely, there is no subsetting yet, so a 700 KB font makes the
+  document 700 KB larger, use a compact font or one subset outside ABAP
+- TrueType outlines only, OpenType with CFF outlines and WOFF are rejected
+- format 4 unicode cmap, which covers the Basic Multilingual Plane
+- no bidi or Arabic shaping, so right to left scripts are not laid out correctly
+- check the font licence before embedding a commercial corporate font
+
+## Supported Base-14 Fonts
 
 All widths come from the Adobe AFM metrics, so `get_text_width( )`, word wrap and table layout
 are exact:

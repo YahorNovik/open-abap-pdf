@@ -5,6 +5,7 @@ CLASS zcl_open_abap_pdf DEFINITION PUBLIC.
         name   TYPE string,
         id     TYPE i,
         obj_id TYPE i,
+        is_ttf TYPE abap_bool,
       END OF ty_font,
       ty_fonts TYPE STANDARD TABLE OF ty_font WITH DEFAULT KEY,
 
@@ -75,8 +76,19 @@ CLASS zcl_open_abap_pdf DEFINITION PUBLIC.
                 iv_height     TYPE f DEFAULT '841.89'
       RETURNING VALUE(ro_pdf) TYPE REF TO zcl_open_abap_pdf.
 
+    "! Embed a TrueType font and make it available for set_font under iv_name.
+    "! The font file is embedded completely, so prefer a compact font.
+    "! @parameter iv_name | Name used in set_font and for /BaseFont
+    "! @parameter iv_data | Content of the ttf file
+    "! @raising zcx_open_abap_pdf | Unsupported font file
+    METHODS register_font
+      IMPORTING iv_name       TYPE string
+                iv_data       TYPE xstring
+      RETURNING VALUE(ro_pdf) TYPE REF TO zcl_open_abap_pdf
+      RAISING   zcx_open_abap_pdf.
+
     "! Set the current font
-    "! @parameter iv_name | Font name (Helvetica, Times-Roman, Courier)
+    "! @parameter iv_name | Base-14 name (Helvetica, Times-Roman, Courier) or a registered TrueType font
     "! @parameter iv_size | Font size in points
     METHODS set_font
       IMPORTING iv_name       TYPE string DEFAULT 'Helvetica'
@@ -198,9 +210,14 @@ CLASS zcl_open_abap_pdf DEFINITION PUBLIC.
       IMPORTING io_layout     TYPE REF TO zif_open_abap_pdf_layout
       RETURNING VALUE(ro_pdf) TYPE REF TO zcl_open_abap_pdf.
 
-    "! Write image streams as ASCII hex instead of raw bytes.
-    "! Doubles the image size, but keeps the whole file 7 bit ASCII, which makes
-    "! render( ) usable for documents with images.
+    "! Write binary streams, that is images and embedded fonts, as ASCII hex.
+    "! Doubles their size, but keeps the whole file 7 bit ASCII, which makes
+    "! render( ) usable for such documents.
+    METHODS set_hex_streams
+      IMPORTING iv_active     TYPE abap_bool DEFAULT abap_true
+      RETURNING VALUE(ro_pdf) TYPE REF TO zcl_open_abap_pdf.
+
+    "! Deprecated, use set_hex_streams
     METHODS set_hex_images
       IMPORTING iv_active     TYPE abap_bool DEFAULT abap_true
       RETURNING VALUE(ro_pdf) TYPE REF TO zcl_open_abap_pdf.
@@ -446,6 +463,18 @@ CLASS zcl_open_abap_pdf DEFINITION PUBLIC.
     METHODS build_images
       RETURNING VALUE(rv_xobjects) TYPE string.
 
+    METHODS add_truetype_font
+      IMPORTING iv_name      TYPE string
+      RETURNING VALUE(rv_id) TYPE i.
+
+    METHODS build_widths
+      IMPORTING it_glyphs        TYPE zcl_open_abap_pdf_font=>ty_glyphs
+      RETURNING VALUE(rv_widths) TYPE string.
+
+    METHODS build_to_unicode
+      IMPORTING it_glyphs      TYPE zcl_open_abap_pdf_font=>ty_glyphs
+      RETURNING VALUE(rv_cmap) TYPE string.
+
     METHODS build_fields
       RETURNING VALUE(rv_field_ids) TYPE string.
 
@@ -603,9 +632,13 @@ CLASS zcl_open_abap_pdf IMPLEMENTATION.
     ro_pdf = me.
   ENDMETHOD.
 
-  METHOD set_hex_images.
+  METHOD set_hex_streams.
     mv_hex_images = iv_active.
     ro_pdf = me.
+  ENDMETHOD.
+
+  METHOD set_hex_images.
+    ro_pdf = set_hex_streams( iv_active ).
   ENDMETHOD.
 
   METHOD set_alias_nb_pages.
@@ -818,6 +851,12 @@ CLASS zcl_open_abap_pdf IMPLEMENTATION.
     ro_pdf = me.
   ENDMETHOD.
 
+  METHOD register_font.
+    zcl_open_abap_pdf_font=>register_truetype( iv_name = iv_name iv_data = iv_data ).
+    ensure_font( iv_name ).
+    ro_pdf = me.
+  ENDMETHOD.
+
   METHOD set_font.
     ensure_font( iv_name ).
     mv_current_font = iv_name.
@@ -869,9 +908,19 @@ CLASS zcl_open_abap_pdf IMPLEMENTATION.
   ENDMETHOD.
 
   METHOD text.
+    DATA lv_show TYPE string.
+
     DATA(lv_y) = transform_y( iv_y ).
-    DATA(lv_escaped) = escape_string( iv_text ).
-    DATA(lv_content) = |BT { format_number( iv_x ) } { format_number( lv_y ) } Td ({ lv_escaped }) Tj ET|.
+
+    IF zcl_open_abap_pdf_font=>is_truetype( mv_current_font ) = abap_true.
+      " Identity-H shows glyph indices, given as a hex string
+      lv_show = |<{ zcl_open_abap_pdf_font=>glyph_hex(
+        iv_name = mv_current_font iv_text = iv_text ) }>|.
+    ELSE.
+      lv_show = |({ escape_string( iv_text ) })|.
+    ENDIF.
+
+    DATA(lv_content) = |BT { format_number( iv_x ) } { format_number( lv_y ) } Td { lv_show } Tj ET|.
     append_to_page( lv_content ).
 
     ro_pdf = me.
@@ -890,7 +939,10 @@ CLASS zcl_open_abap_pdf IMPLEMENTATION.
     append_to_page( |q { format_number( lv_cos ) } { format_number( lv_sin ) } | &&
       |{ format_number( lv_sin * -1 ) } { format_number( lv_cos ) } | &&
       |{ format_number( iv_x ) } { format_number( lv_y ) } cm | &&
-      |BT 0 0 Td ({ escape_string( iv_text ) }) Tj ET Q| ).
+      |BT 0 0 Td { COND string(
+        WHEN zcl_open_abap_pdf_font=>is_truetype( mv_current_font ) = abap_true
+        THEN |<{ zcl_open_abap_pdf_font=>glyph_hex( iv_name = mv_current_font iv_text = iv_text ) }>|
+        ELSE |({ escape_string( iv_text ) })| ) } Tj ET Q| ).
 
     ro_pdf = me.
   ENDMETHOD.
@@ -985,13 +1037,21 @@ CLASS zcl_open_abap_pdf IMPLEMENTATION.
 
     " Add fonts first
     LOOP AT mt_fonts INTO ls_font.
+      DATA(lv_font_tabix) = sy-tabix.
+
+      IF ls_font-is_ttf = abap_true.
+        ls_font-obj_id = add_truetype_font( ls_font-name ).
+        MODIFY mt_fonts FROM ls_font INDEX lv_font_tabix.
+        CONTINUE.
+      ENDIF.
+
       lv_encoding = ' /Encoding /WinAnsiEncoding'.
       IF ls_font-name = 'ZapfDingbats' OR ls_font-name = 'Symbol'.
         CLEAR lv_encoding.
       ENDIF.
       ls_font-obj_id = add_object(
         |<< /Type /Font /Subtype /Type1 /BaseFont /{ ls_font-name }{ lv_encoding } >>| ).
-      MODIFY mt_fonts FROM ls_font INDEX sy-tabix.
+      MODIFY mt_fonts FROM ls_font INDEX lv_font_tabix.
     ENDLOOP.
 
     " Add page content streams and page objects
@@ -1335,6 +1395,86 @@ CLASS zcl_open_abap_pdf IMPLEMENTATION.
     ENDLOOP.
   ENDMETHOD.
 
+  METHOD build_widths.
+    DATA ls_glyph TYPE zcl_open_abap_pdf_font=>ty_glyph.
+
+    " One entry per glyph, [ gid [ width ] ], which is compact enough for documents
+    LOOP AT it_glyphs INTO ls_glyph.
+      IF ls_glyph-gid = 0.
+        CONTINUE.
+      ENDIF.
+      rv_widths = |{ rv_widths }{ ls_glyph-gid } [{ ls_glyph-width }] |.
+    ENDLOOP.
+  ENDMETHOD.
+
+  METHOD build_to_unicode.
+    DATA ls_glyph TYPE zcl_open_abap_pdf_font=>ty_glyph.
+    DATA lv_gid TYPE x LENGTH 2.
+    DATA lv_cp TYPE x LENGTH 2.
+    DATA lv_entries TYPE string.
+    DATA lv_count TYPE i.
+
+    LOOP AT it_glyphs INTO ls_glyph.
+      IF ls_glyph-gid = 0 OR ls_glyph-cp > 65535.
+        CONTINUE.
+      ENDIF.
+      lv_gid = ls_glyph-gid.
+      lv_cp = ls_glyph-cp.
+      lv_entries = |{ lv_entries }<{ lv_gid }> <{ lv_cp }>\n|.
+      lv_count = lv_count + 1.
+    ENDLOOP.
+
+    " Without this map a reader cannot copy or search the text
+    rv_cmap = |/CIDInit /ProcSet findresource begin\n12 dict begin\nbegincmap\n| &&
+              |/CIDSystemInfo << /Registry (Adobe) /Ordering (UCS) /Supplement 0 >> def\n| &&
+              |/CMapName /Adobe-Identity-UCS def\n/CMapType 2 def\n| &&
+              |1 begincodespacerange\n<0000> <FFFF>\nendcodespacerange\n| &&
+              |{ lv_count } beginbfchar\n{ lv_entries }endbfchar\n| &&
+              |endcmap\nCMapName currentdict /CMap defineresource pop\nend\nend|.
+  ENDMETHOD.
+
+  METHOD add_truetype_font.
+    DATA(ls_info) = zcl_open_abap_pdf_font=>ttf_info( iv_name ).
+    DATA(lt_glyphs) = zcl_open_abap_pdf_font=>used_glyphs( iv_name ).
+
+    DATA(lv_scale) = CONV f( 1000 ) / ls_info-units.
+
+    DATA(lv_font_dict) = |<< /Length1 { xstrlen( ls_info-data ) }|.
+    DATA(lv_font_data) = ls_info-data.
+    IF mv_hex_images = abap_true.
+      lv_font_dict = |{ lv_font_dict } /Filter /ASCIIHexDecode|.
+      lv_font_data = cl_abap_codepage=>convert_to( |{ lv_font_data }>| ).
+    ENDIF.
+
+    DATA(lv_file_id) = add_stream_object( iv_dict = lv_font_dict iv_data = lv_font_data ).
+
+    DATA(lv_descriptor_id) = add_object(
+      |<< /Type /FontDescriptor /FontName /{ ls_info-name } /Flags 32 | &&
+      |/FontBBox [{ format_number( ls_info-x_min * lv_scale ) } | &&
+      |{ format_number( ls_info-y_min * lv_scale ) } | &&
+      |{ format_number( ls_info-x_max * lv_scale ) } | &&
+      |{ format_number( ls_info-y_max * lv_scale ) }] | &&
+      |/ItalicAngle { ls_info-italic_angle } | &&
+      |/Ascent { format_number( ls_info-ascent * lv_scale ) } | &&
+      |/Descent { format_number( ls_info-descent * lv_scale ) } | &&
+      |/CapHeight { format_number( ls_info-cap_height * lv_scale ) } | &&
+      |/StemV 80 /FontFile2 { lv_file_id } 0 R >>| ).
+
+    DATA(lv_cid_id) = add_object(
+      |<< /Type /Font /Subtype /CIDFontType2 /BaseFont /{ ls_info-name } | &&
+      |/CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) /Supplement 0 >> | &&
+      |/FontDescriptor { lv_descriptor_id } 0 R /DW 1000 | &&
+      |/W [{ build_widths( lt_glyphs ) }] /CIDToGIDMap /Identity >>| ).
+
+    DATA(lv_cmap_id) = add_stream_object(
+      iv_data = cl_abap_codepage=>convert_to( build_to_unicode( lt_glyphs ) ) ).
+
+    rv_id = add_object(
+      |<< /Type /Font /Subtype /Type0 /BaseFont /{ ls_info-name } | &&
+      |/Encoding /Identity-H /DescendantFonts [{ lv_cid_id } 0 R] | &&
+      |/ToUnicode { lv_cmap_id } 0 R >>| ).
+  ENDMETHOD.
+
   METHOD build_images.
     DATA ls_image TYPE ty_image.
     DATA lv_colorspace TYPE string.
@@ -1536,6 +1676,7 @@ CLASS zcl_open_abap_pdf IMPLEMENTATION.
     IF sy-subrc <> 0.
       ls_font-name = iv_name.
       ls_font-id = lines( mt_fonts ) + 1.
+      ls_font-is_ttf = zcl_open_abap_pdf_font=>is_truetype( iv_name ).
       APPEND ls_font TO mt_fonts.
     ENDIF.
   ENDMETHOD.

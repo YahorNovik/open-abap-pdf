@@ -49,7 +49,7 @@ CLASS ltcl_image IMPLEMENTATION.
 
   METHOD place_in_document.
     DATA(lo_pdf) = zcl_open_abap_pdf=>create( ).
-    lo_pdf->set_hex_images( ).
+    lo_pdf->set_hex_streams( ).
     lo_pdf->add_page( ).
     lo_pdf->image_base64(
       iv_base64 = zcl_pdf_test_images=>png( )

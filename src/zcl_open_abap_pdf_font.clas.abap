@@ -3,6 +3,14 @@ CLASS zcl_open_abap_pdf_font DEFINITION PUBLIC FINAL CREATE PRIVATE.
     TYPES ty_lines TYPE STANDARD TABLE OF string WITH DEFAULT KEY.
     TYPES ty_codes TYPE STANDARD TABLE OF i WITH DEFAULT KEY.
 
+    TYPES:
+      BEGIN OF ty_glyph,
+        cp    TYPE i,
+        gid   TYPE i,
+        width TYPE i,
+      END OF ty_glyph,
+      ty_glyphs TYPE SORTED TABLE OF ty_glyph WITH UNIQUE KEY cp.
+
     "! Width of a text in points for the given Base-14 font and size
     CLASS-METHODS text_width
       IMPORTING iv_font         TYPE string
@@ -45,6 +53,38 @@ CLASS zcl_open_abap_pdf_font DEFINITION PUBLIC FINAL CREATE PRIVATE.
       IMPORTING iv_text         TYPE string
       RETURNING VALUE(rt_codes) TYPE ty_codes.
 
+    "! Unicode code points of a text
+    CLASS-METHODS to_unicode
+      IMPORTING iv_text         TYPE string
+      RETURNING VALUE(rt_codes) TYPE ty_codes.
+
+    "! Make a TrueType font available under iv_name for set_font and text_width
+    "! @raising zcx_open_abap_pdf | Unsupported font file
+    CLASS-METHODS register_truetype
+      IMPORTING iv_name TYPE string
+                iv_data TYPE xstring
+      RAISING   zcx_open_abap_pdf.
+
+    CLASS-METHODS is_truetype
+      IMPORTING iv_name       TYPE string
+      RETURNING VALUE(rv_yes) TYPE abap_bool.
+
+    CLASS-METHODS ttf_info
+      IMPORTING iv_name        TYPE string
+      RETURNING VALUE(rs_info) TYPE zcl_open_abap_pdf_ttf=>ty_info.
+
+    "! Glyph indices of a text as hex string, for use with the Identity-H encoding.
+    "! The glyphs are remembered so that only used glyphs are described in the PDF.
+    CLASS-METHODS glyph_hex
+      IMPORTING iv_name       TYPE string
+                iv_text       TYPE string
+      RETURNING VALUE(rv_hex) TYPE string.
+
+    "! Glyphs of a font that were used so far
+    CLASS-METHODS used_glyphs
+      IMPORTING iv_name          TYPE string
+      RETURNING VALUE(rt_glyphs) TYPE ty_glyphs.
+
     "! True if the font name is one of the Base-14 fonts with known metrics
     CLASS-METHODS is_supported
       IMPORTING iv_font       TYPE string
@@ -61,7 +101,21 @@ CLASS zcl_open_abap_pdf_font DEFINITION PUBLIC FINAL CREATE PRIVATE.
       END OF ty_cache,
       ty_caches TYPE STANDARD TABLE OF ty_cache WITH DEFAULT KEY.
 
+    TYPES:
+      BEGIN OF ty_ttf,
+        name   TYPE string,
+        info   TYPE zcl_open_abap_pdf_ttf=>ty_info,
+        glyphs TYPE ty_glyphs,
+      END OF ty_ttf,
+      ty_ttfs TYPE STANDARD TABLE OF ty_ttf WITH DEFAULT KEY.
+
     CLASS-DATA gt_cache TYPE ty_caches.
+    CLASS-DATA gt_ttf TYPE ty_ttfs.
+
+    CLASS-METHODS glyph_of
+      IMPORTING iv_name         TYPE string
+                iv_cp           TYPE i
+      RETURNING VALUE(rs_glyph) TYPE ty_glyph.
 
     " WinAnsi specials outside Latin-1, packed as 4 digit code point + 3 digit WinAnsi code
     CONSTANTS c_specials TYPE string
@@ -103,10 +157,81 @@ CLASS zcl_open_abap_pdf_font IMPLEMENTATION.
     rv_widths = ls_cache-widths.
   ENDMETHOD.
 
+  METHOD register_truetype.
+    DATA ls_ttf TYPE ty_ttf.
+
+    DELETE gt_ttf WHERE name = iv_name.
+
+    ls_ttf-name = iv_name.
+    ls_ttf-info = zcl_open_abap_pdf_ttf=>parse( iv_data = iv_data iv_name = iv_name ).
+    APPEND ls_ttf TO gt_ttf.
+  ENDMETHOD.
+
+  METHOD is_truetype.
+    READ TABLE gt_ttf TRANSPORTING NO FIELDS WITH KEY name = iv_name.
+    rv_yes = xsdbool( sy-subrc = 0 ).
+  ENDMETHOD.
+
+  METHOD ttf_info.
+    READ TABLE gt_ttf INTO DATA(ls_ttf) WITH KEY name = iv_name.
+    IF sy-subrc = 0.
+      rs_info = ls_ttf-info.
+    ENDIF.
+  ENDMETHOD.
+
+  METHOD used_glyphs.
+    READ TABLE gt_ttf INTO DATA(ls_ttf) WITH KEY name = iv_name.
+    IF sy-subrc = 0.
+      rt_glyphs = ls_ttf-glyphs.
+    ENDIF.
+  ENDMETHOD.
+
+  METHOD glyph_of.
+    FIELD-SYMBOLS <ls_ttf> TYPE ty_ttf.
+
+    READ TABLE gt_ttf ASSIGNING <ls_ttf> WITH KEY name = iv_name.
+    IF sy-subrc <> 0.
+      RETURN.
+    ENDIF.
+
+    READ TABLE <ls_ttf>-glyphs INTO rs_glyph WITH KEY cp = iv_cp.
+    IF sy-subrc = 0.
+      RETURN.
+    ENDIF.
+
+    rs_glyph-cp = iv_cp.
+    rs_glyph-gid = zcl_open_abap_pdf_ttf=>glyph_id( is_info = <ls_ttf>-info iv_cp = iv_cp ).
+    rs_glyph-width = zcl_open_abap_pdf_ttf=>advance(
+      is_info = <ls_ttf>-info
+      iv_gid  = rs_glyph-gid ) * 1000 / <ls_ttf>-info-units.
+
+    INSERT rs_glyph INTO TABLE <ls_ttf>-glyphs.
+  ENDMETHOD.
+
+  METHOD glyph_hex.
+    DATA lv_cp TYPE i.
+    DATA lv_gid TYPE i.
+    DATA lv_hex TYPE x LENGTH 2.
+
+    LOOP AT to_unicode( iv_text ) INTO lv_cp.
+      lv_gid = glyph_of( iv_name = iv_name iv_cp = lv_cp )-gid.
+      lv_hex = lv_gid.
+      rv_hex = rv_hex && |{ lv_hex }|.
+    ENDLOOP.
+  ENDMETHOD.
+
   METHOD text_width.
     DATA lv_code TYPE i.
     DATA lv_offset TYPE i.
     DATA lv_sum TYPE i.
+
+    IF is_truetype( iv_font ) = abap_true.
+      LOOP AT to_unicode( iv_text ) INTO lv_code.
+        lv_sum = lv_sum + glyph_of( iv_name = iv_font iv_cp = lv_code )-width.
+      ENDLOOP.
+      rv_width = lv_sum * iv_size / 1000.
+      RETURN.
+    ENDIF.
 
     DATA(lv_widths) = get_widths( iv_font ).
 
@@ -250,6 +375,14 @@ CLASS zcl_open_abap_pdf_font IMPLEMENTATION.
   ENDMETHOD.
 
   METHOD to_codes.
+    DATA lv_cp TYPE i.
+
+    LOOP AT to_unicode( iv_text ) INTO lv_cp.
+      APPEND unicode_to_winansi( lv_cp ) TO rt_codes.
+    ENDLOOP.
+  ENDMETHOD.
+
+  METHOD to_unicode.
     DATA lv_bytes TYPE xstring.
     DATA lv_byte TYPE x LENGTH 1.
     DATA lv_b1 TYPE i.
@@ -285,7 +418,7 @@ CLASS zcl_open_abap_pdf_font IMPLEMENTATION.
         lv_cp = 63.
       ENDIF.
 
-      APPEND unicode_to_winansi( lv_cp ) TO rt_codes.
+      APPEND lv_cp TO rt_codes.
     ENDWHILE.
   ENDMETHOD.
 
