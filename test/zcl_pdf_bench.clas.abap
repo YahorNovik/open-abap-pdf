@@ -2,6 +2,7 @@ CLASS zcl_pdf_bench DEFINITION PUBLIC FINAL CREATE PUBLIC.
   PUBLIC SECTION.
     CLASS-METHODS run
       IMPORTING iv_rows       TYPE i
+                iv_compress   TYPE abap_bool DEFAULT abap_false
       RETURNING VALUE(rv_out) TYPE string.
 ENDCLASS.
 
@@ -11,6 +12,7 @@ CLASS zcl_pdf_bench IMPLEMENTATION.
     DATA lv_i TYPE i.
 
     DATA(lo_pdf) = zcl_open_abap_pdf=>create( ).
+    lo_pdf->set_compression( iv_compress ).
     lo_pdf->set_margins( iv_left = 40 iv_top = 40 iv_right = 40 iv_bottom = 40 ).
     lo_pdf->add_page( ).
 

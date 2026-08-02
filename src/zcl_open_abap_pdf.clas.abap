@@ -222,6 +222,13 @@ CLASS zcl_open_abap_pdf DEFINITION PUBLIC.
       IMPORTING iv_active     TYPE abap_bool DEFAULT abap_true
       RETURNING VALUE(ro_pdf) TYPE REF TO zcl_open_abap_pdf.
 
+    "! Compress page content, embedded fonts and the ToUnicode maps with FlateDecode.
+    "! Typically shrinks a text heavy document to a fifth and an embedded font to a half.
+    "! Images keep their own compression. Not compatible with set_hex_streams.
+    METHODS set_compression
+      IMPORTING iv_active     TYPE abap_bool DEFAULT abap_true
+      RETURNING VALUE(ro_pdf) TYPE REF TO zcl_open_abap_pdf.
+
     "! Placeholder that is replaced by the total number of pages while rendering
     METHODS set_alias_nb_pages
       IMPORTING iv_alias      TYPE string DEFAULT '{nb}'
@@ -422,6 +429,7 @@ CLASS zcl_open_abap_pdf DEFINITION PUBLIC.
     DATA mo_layout TYPE REF TO zif_open_abap_pdf_layout.
     DATA mv_in_layout TYPE abap_bool.
     DATA mv_hex_images TYPE abap_bool.
+    DATA mv_compress TYPE abap_bool.
     DATA mv_flatten TYPE abap_bool.
     DATA mt_fields TYPE ty_fields.
 
@@ -431,6 +439,11 @@ CLASS zcl_open_abap_pdf DEFINITION PUBLIC.
       RETURNING VALUE(rv_id) TYPE i.
 
     METHODS add_stream_object
+      IMPORTING iv_dict      TYPE string DEFAULT '<<'
+                iv_data      TYPE xstring
+      RETURNING VALUE(rv_id) TYPE i.
+
+    METHODS add_flate_object
       IMPORTING iv_dict      TYPE string DEFAULT '<<'
                 iv_data      TYPE xstring
       RETURNING VALUE(rv_id) TYPE i.
@@ -639,6 +652,22 @@ CLASS zcl_open_abap_pdf IMPLEMENTATION.
 
   METHOD set_hex_images.
     ro_pdf = set_hex_streams( iv_active ).
+  ENDMETHOD.
+
+  METHOD set_compression.
+    mv_compress = iv_active.
+    ro_pdf = me.
+  ENDMETHOD.
+
+  METHOD add_flate_object.
+    IF mv_compress = abap_false.
+      rv_id = add_stream_object( iv_dict = iv_dict iv_data = iv_data ).
+      RETURN.
+    ENDIF.
+
+    rv_id = add_stream_object(
+      iv_dict = |{ iv_dict } /Filter /FlateDecode|
+      iv_data = zcl_open_abap_pdf_writer=>zlib_compress( iv_data ) ).
   ENDMETHOD.
 
   METHOD set_alias_nb_pages.
@@ -1062,7 +1091,7 @@ CLASS zcl_open_abap_pdf IMPLEMENTATION.
         REPLACE ALL OCCURRENCES OF mv_nb_alias IN lv_stream WITH |{ lines( mt_pages ) }|.
       ENDIF.
 
-      ls_page-content_id = add_stream_object( iv_data = cl_abap_codepage=>convert_to( lv_stream ) ).
+      ls_page-content_id = add_flate_object( iv_data = cl_abap_codepage=>convert_to( lv_stream ) ).
       MODIFY mt_pages FROM ls_page INDEX lv_page_tabix.
     ENDLOOP.
 
@@ -1441,12 +1470,15 @@ CLASS zcl_open_abap_pdf IMPLEMENTATION.
 
     DATA(lv_font_dict) = |<< /Length1 { xstrlen( ls_info-data ) }|.
     DATA(lv_font_data) = ls_info-data.
+    DATA lv_file_id TYPE i.
+
     IF mv_hex_images = abap_true.
       lv_font_dict = |{ lv_font_dict } /Filter /ASCIIHexDecode|.
       lv_font_data = cl_abap_codepage=>convert_to( |{ lv_font_data }>| ).
+      lv_file_id = add_stream_object( iv_dict = lv_font_dict iv_data = lv_font_data ).
+    ELSE.
+      lv_file_id = add_flate_object( iv_dict = lv_font_dict iv_data = lv_font_data ).
     ENDIF.
-
-    DATA(lv_file_id) = add_stream_object( iv_dict = lv_font_dict iv_data = lv_font_data ).
 
     DATA(lv_descriptor_id) = add_object(
       |<< /Type /FontDescriptor /FontName /{ ls_info-name } /Flags 32 | &&
@@ -1466,7 +1498,7 @@ CLASS zcl_open_abap_pdf IMPLEMENTATION.
       |/FontDescriptor { lv_descriptor_id } 0 R /DW 1000 | &&
       |/W [{ build_widths( lt_glyphs ) }] /CIDToGIDMap /Identity >>| ).
 
-    DATA(lv_cmap_id) = add_stream_object(
+    DATA(lv_cmap_id) = add_flate_object(
       iv_data = cl_abap_codepage=>convert_to( build_to_unicode( lt_glyphs ) ) ).
 
     rv_id = add_object(

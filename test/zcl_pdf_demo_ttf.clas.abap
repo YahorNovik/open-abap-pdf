@@ -31,6 +31,7 @@ CLASS zcl_pdf_demo_ttf IMPLEMENTATION.
 
   METHOD run_base64.
     DATA(lo_pdf) = zcl_open_abap_pdf=>create( ).
+    lo_pdf->set_compression( ).
     lo_pdf->set_margins( iv_left = 45 iv_top = 45 iv_right = 45 iv_bottom = 45 ).
     lo_pdf->register_font( iv_name = c_font iv_data = iv_ttf ).
     IF iv_ttf_bold IS NOT INITIAL.

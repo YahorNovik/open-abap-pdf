@@ -524,6 +524,7 @@ CLASS zcl_pdf_demo_complex IMPLEMENTATION.
     gv_watermark = abap_true.
 
     DATA(lo_pdf) = zcl_open_abap_pdf=>create( ).
+    lo_pdf->set_compression( ).
     lo_pdf->set_layout( NEW zcl_pdf_demo_complex( ) ).
     lo_pdf->set_margins( iv_left = c_left iv_top = 45 iv_right = c_left iv_bottom = 45 ).
     lo_pdf->set_auto_page_break( iv_active = abap_true iv_margin = 62 ).

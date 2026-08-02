@@ -18,6 +18,7 @@ Plan is to have the same code run on:
 - Layout engine: margins, cursor, `cell`, `multi_cell`, automatic page break, header and footer callbacks, total page count placeholder
 - Tables with column widths, wrapping cells, zebra shading, borders, a header row that repeats after a page break, full width group and subtotal rows, and keep with next so a group header never ends a page
 - Images: JPEG (DCTDecode) and PNG (FlateDecode), scaling, dpi, raw or ASCII hex streams
+- Optional FlateDecode compression of content, fonts and ToUnicode maps, typically a fifth of the size
 - Interactive forms (AcroForm): text fields, check boxes, radio groups, drop downs, plus a flatten mode that draws the values as static text
 - Set text, draw, and fill colors (RGB)
 - Draw shapes: lines, rectangles, circles
@@ -243,6 +244,7 @@ lo_pdf->add_page(
 | `image_base64( iv_base64, ... )` | Place a base64 encoded image |
 | `register_font( iv_name, iv_data )` | Embed a TrueType font |
 | `set_hex_streams( iv_active )` | Write images and fonts as ASCII hex |
+| `set_compression( iv_active )` | FlateDecode for content, fonts and ToUnicode maps |
 | `text_field( )`, `checkbox( )`, `radio_button( )`, `dropdown( )` | Interactive form fields |
 | `set_flatten_form( iv_active )` | Draw fields as static boxes |
 | `get_field_count( )` | Number of interactive fields |
@@ -269,6 +271,26 @@ lo_pdf->add_page(
 | `D` | Draw outline only (default) |
 | `F` | Fill only |
 | `DF` or `FD` | Draw outline and fill |
+
+## Compression
+
+```abap
+lo_pdf->set_compression( ).
+```
+
+Compresses page content, embedded fonts and the ToUnicode maps with FlateDecode. `cl_abap_gzip`
+produces a raw deflate stream, so the library adds the zlib header and the Adler-32 checksum that
+the filter requires. Measured with `ZCL_PDF_BENCH`:
+
+| Document | Uncompressed | Compressed |
+|----------|--------------|------------|
+| 1 000 row report, 15 pages | 370 KB | 56 KB |
+| 4 000 row report, 59 pages | 1 490 KB | 222 KB |
+| order confirmation, 2 pages | 52 KB | 14 KB |
+| page with two embedded fonts | 1 477 KB | 753 KB |
+
+It is off by default because `render( )` then returns a binary document that can no longer be
+inspected as a string. Switch it on in production and leave it off while developing.
 
 ## Embedded TrueType fonts
 
