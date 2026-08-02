@@ -60,9 +60,10 @@ CLASS zcl_open_abap_pdf DEFINITION PUBLIC.
       c_pi            TYPE f VALUE '3.14159265358979'.
 
     CONSTANTS:
-      c_align_left   TYPE string VALUE 'L',
-      c_align_center TYPE string VALUE 'C',
-      c_align_right  TYPE string VALUE 'R'.
+      c_align_left    TYPE string VALUE 'L',
+      c_align_center  TYPE string VALUE 'C',
+      c_align_right   TYPE string VALUE 'R',
+      c_align_justify TYPE string VALUE 'J'.
 
     "! Create a new PDF document
     CLASS-METHODS create
@@ -126,6 +127,14 @@ CLASS zcl_open_abap_pdf DEFINITION PUBLIC.
       IMPORTING iv_x          TYPE f
                 iv_y          TYPE f
                 iv_text       TYPE string
+      RETURNING VALUE(ro_pdf) TYPE REF TO zcl_open_abap_pdf.
+
+    "! Draw text stretched to exactly iv_width by widening the gaps between words
+    METHODS text_justified
+      IMPORTING iv_x          TYPE f
+                iv_y          TYPE f
+                iv_text       TYPE string
+                iv_width      TYPE f
       RETURNING VALUE(ro_pdf) TYPE REF TO zcl_open_abap_pdf.
 
     "! Draw text rotated around its anchor point
@@ -409,6 +418,31 @@ CLASS zcl_open_abap_pdf DEFINITION PUBLIC.
     METHODS get_field_count
       RETURNING VALUE(rv_count) TYPE i.
 
+    "! Draw a Code 128 barcode, character set B, including the quiet zone of ten
+    "! modules on each side, so the total width is ( modules + 20 ) * iv_module
+    "! @parameter iv_module | Width of the narrowest bar in points
+    "! @raising zcx_open_abap_pdf | Text cannot be encoded
+    METHODS barcode_128
+      IMPORTING iv_x          TYPE f
+                iv_y          TYPE f
+                iv_text       TYPE string
+                iv_height     TYPE f DEFAULT 30
+                iv_module     TYPE f DEFAULT '0.8'
+      RETURNING VALUE(ro_pdf) TYPE REF TO zcl_open_abap_pdf
+      RAISING   zcx_open_abap_pdf.
+
+    "! Draw a QR code, error correction level M, including the quiet zone of four
+    "! modules, which the standard requires
+    "! @parameter iv_size | Width and height including the quiet zone, in points
+    "! @raising zcx_open_abap_pdf | Text does not fit
+    METHODS qrcode
+      IMPORTING iv_x          TYPE f
+                iv_y          TYPE f
+                iv_text       TYPE string
+                iv_size       TYPE f DEFAULT 80
+      RETURNING VALUE(ro_pdf) TYPE REF TO zcl_open_abap_pdf
+      RAISING   zcx_open_abap_pdf.
+
     "! Place a base64 encoded JPEG or PNG image
     METHODS image_base64
       IMPORTING iv_base64     TYPE string
@@ -487,6 +521,10 @@ CLASS zcl_open_abap_pdf DEFINITION PUBLIC.
       IMPORTING iv_dict      TYPE string DEFAULT '<<'
                 iv_data      TYPE xstring
       RETURNING VALUE(rv_id) TYPE i.
+
+    METHODS show_operand
+      IMPORTING iv_text           TYPE string
+      RETURNING VALUE(rv_operand) TYPE string.
 
     METHODS resolve_page_count.
 
@@ -650,6 +688,90 @@ CLASS zcl_open_abap_pdf IMPLEMENTATION.
     append_to_page( |q { format_number( lv_width ) } 0 0 { format_number( lv_height ) } | &&
       |{ format_number( iv_x ) } { format_number( transform_y( iv_y + lv_height ) ) } cm | &&
       |/Im{ ls_image-id } Do Q| ).
+
+    ro_pdf = me.
+  ENDMETHOD.
+
+  METHOD barcode_128.
+    DATA lv_run TYPE i.
+
+    DATA(lv_modules) = zcl_open_abap_pdf_barcode=>code128( iv_text ).
+    DATA(lv_offset) = 0.
+
+    append_to_page( mv_text_color ).
+    WHILE lv_offset < strlen( lv_modules ).
+      IF lv_modules+lv_offset(1) <> '1'.
+        lv_offset = lv_offset + 1.
+        CONTINUE.
+      ENDIF.
+
+      " Draw neighbouring dark modules as one rectangle
+      lv_run = 0.
+      WHILE lv_offset + lv_run < strlen( lv_modules ).
+        DATA(lv_next) = lv_offset + lv_run.
+        IF lv_modules+lv_next(1) <> '1'.
+          EXIT.
+        ENDIF.
+        lv_run = lv_run + 1.
+      ENDWHILE.
+
+      rect(
+        iv_x      = iv_x + ( lv_offset + 10 ) * iv_module
+        iv_y      = iv_y
+        iv_width  = lv_run * iv_module
+        iv_height = iv_height
+        iv_style  = 'F' ).
+
+      lv_offset = lv_offset + lv_run.
+    ENDWHILE.
+
+    ro_pdf = me.
+  ENDMETHOD.
+
+  METHOD qrcode.
+    DATA lv_row TYPE string.
+
+    DATA(lt_rows) = zcl_open_abap_pdf_qr=>encode( iv_text ).
+    DATA(lv_modules) = lines( lt_rows ).
+    IF lv_modules = 0.
+      ro_pdf = me.
+      RETURN.
+    ENDIF.
+
+    " Four light modules on every side belong to the symbol
+    DATA(lv_step) = iv_size / ( lv_modules + 8 ).
+    DATA(lv_origin_x) = iv_x + 4 * lv_step.
+    DATA(lv_origin_y) = iv_y + 4 * lv_step.
+
+    append_to_page( mv_text_color ).
+    LOOP AT lt_rows INTO lv_row.
+      DATA(lv_y) = lv_origin_y + ( sy-tabix - 1 ) * lv_step.
+      DATA(lv_offset) = 0.
+
+      WHILE lv_offset < strlen( lv_row ).
+        IF lv_row+lv_offset(1) = '1'.
+          DATA(lv_run) = 0.
+          WHILE lv_offset + lv_run < strlen( lv_row ).
+            DATA(lv_next) = lv_offset + lv_run.
+            IF lv_row+lv_next(1) <> '1'.
+              EXIT.
+            ENDIF.
+            lv_run = lv_run + 1.
+          ENDWHILE.
+
+          rect(
+            iv_x      = lv_origin_x + lv_offset * lv_step
+            iv_y      = lv_y
+            iv_width  = lv_run * lv_step
+            iv_height = lv_step
+            iv_style  = 'F' ).
+
+          lv_offset = lv_offset + lv_run.
+          CONTINUE.
+        ENDIF.
+        lv_offset = lv_offset + 1.
+      ENDWHILE.
+    ENDLOOP.
 
     ro_pdf = me.
   ENDMETHOD.
@@ -1051,11 +1173,37 @@ CLASS zcl_open_abap_pdf IMPLEMENTATION.
         ENDIF.
       ENDIF.
 
+      DATA(lv_align) = iv_align.
+      IF iv_align = c_align_justify.
+        " The last line of a block keeps its natural word gaps
+        lv_align = c_align_left.
+        IF sy-tabix < lines( lt_lines ).
+          DATA(lv_text_x) = mv_x + iv_padding.
+          DATA(lv_text_y) = mv_y + ( lv_height + mv_current_font_size * '0.7' ) / 2.
+
+          cell(
+            iv_text    = ''
+            iv_width   = lv_width
+            iv_height  = lv_height
+            iv_border  = lv_border
+            iv_fill    = iv_fill
+            iv_ln      = abap_false ).
+          text_justified(
+            iv_x     = lv_text_x
+            iv_y     = lv_text_y
+            iv_text  = lv_line
+            iv_width = lv_width - 2 * iv_padding ).
+          mv_y = mv_y + lv_height.
+          mv_x = mv_margin_left.
+          CONTINUE.
+        ENDIF.
+      ENDIF.
+
       cell(
         iv_text    = lv_line
         iv_width   = lv_width
         iv_height  = lv_height
-        iv_align   = iv_align
+        iv_align   = lv_align
         iv_border  = lv_border
         iv_fill    = iv_fill
         iv_padding = iv_padding ).
@@ -1121,23 +1269,64 @@ CLASS zcl_open_abap_pdf IMPLEMENTATION.
     ro_pdf = me.
   ENDMETHOD.
 
-  METHOD text.
-    DATA lv_show TYPE string.
-
-    DATA(lv_y) = transform_y( iv_y ).
-
+  METHOD show_operand.
     IF zcl_open_abap_pdf_font=>is_truetype( mv_current_font ) = abap_true.
       " Identity-H shows glyph indices, given as a hex string
-      lv_show = |<{ zcl_open_abap_pdf_font=>glyph_hex(
+      rv_operand = |<{ zcl_open_abap_pdf_font=>glyph_hex(
         iv_name = mv_current_font iv_text = iv_text ) }>|.
     ELSE.
-      lv_show = |({ escape_string( iv_text ) })|.
+      rv_operand = |({ escape_string( iv_text ) })|.
     ENDIF.
+  ENDMETHOD.
 
-    DATA(lv_content) = |BT { format_number( iv_x ) } { format_number( lv_y ) } Td { lv_show } Tj ET|.
+  METHOD text.
+    DATA(lv_y) = transform_y( iv_y ).
+    DATA(lv_content) = |BT { format_number( iv_x ) } { format_number( lv_y ) } Td | &&
+                       |{ show_operand( iv_text ) } Tj ET|.
     append_to_page( lv_content ).
 
     ro_pdf = me.
+  ENDMETHOD.
+
+  METHOD text_justified.
+    DATA lv_word TYPE string.
+    DATA lv_words_width TYPE f.
+    DATA lv_array TYPE string.
+
+    ro_pdf = me.
+
+    SPLIT iv_text AT ` ` INTO TABLE DATA(lt_words).
+    DELETE lt_words WHERE table_line IS INITIAL.
+
+    IF lines( lt_words ) < 2.
+      text( iv_x = iv_x iv_y = iv_y iv_text = iv_text ).
+      RETURN.
+    ENDIF.
+
+    LOOP AT lt_words INTO lv_word.
+      lv_words_width = lv_words_width + get_text_width( lv_word ).
+    ENDLOOP.
+
+    " The gap replaces the blank completely, so it is distributed over the gaps only
+    DATA(lv_gap) = ( iv_width - lv_words_width ) / ( lines( lt_words ) - 1 ).
+    IF lv_gap < 0.
+      text( iv_x = iv_x iv_y = iv_y iv_text = iv_text ).
+      RETURN.
+    ENDIF.
+
+    " In a TJ array a negative number moves the next glyph to the right
+    DATA(lv_adjust) = format_number( lv_gap * -1000 / mv_current_font_size ).
+
+    LOOP AT lt_words INTO lv_word.
+      IF sy-tabix > 1.
+        lv_array = |{ lv_array } { lv_adjust } |.
+      ENDIF.
+      lv_array = |{ lv_array }{ show_operand( lv_word ) }|.
+    ENDLOOP.
+
+    DATA(lv_content) = |BT { format_number( iv_x ) } { format_number( transform_y( iv_y ) ) } Td | &&
+                       |[{ lv_array }] TJ ET|.
+    append_to_page( lv_content ).
   ENDMETHOD.
 
   METHOD text_rotated.
