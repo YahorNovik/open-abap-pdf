@@ -15,6 +15,8 @@ GLYPHS = [
     (None, 500, None),
     (0x41, 600, (50, 0, 550, 700)),
     (0x141, 500, (50, 0, 450, 700)),
+    (0x31, 400, (50, 0, 350, 700)),
+    (0x32, 400, (50, 0, 350, 700)),
 ]
 
 
@@ -36,7 +38,8 @@ def simple_glyph(box):
 
 
 def cmap_format4():
-    segments = [(0x41, 0x41, 1), (0x141, 0x141, 2), (0xFFFF, 0xFFFF, 0)]
+    mapping = sorted((cp, gid) for gid, (cp, _, _) in enumerate(GLYPHS) if cp)
+    segments = [(cp, cp, gid) for cp, gid in mapping] + [(0xFFFF, 0xFFFF, 0)]
     seg_count = len(segments)
     ends = b"".join(struct.pack(">H", s[1]) for s in segments)
     starts = b"".join(struct.pack(">H", s[0]) for s in segments)

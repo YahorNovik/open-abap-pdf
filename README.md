@@ -68,6 +68,7 @@ Demo classes in `test/`:
 | `ZCL_PDF_DEMO_FORM` | fillable form and its flattened copy |
 | `ZCL_PDF_DEMO_INVOICE` | replica of a Polish VAT invoice, logo, VAT summary |
 | `ZCL_PDF_DEMO_TTF` | embedded TrueType font with Polish, Czech, Turkish, Cyrillic and Greek text |
+| `ZCL_PDF_DEMO_PDFA` | archive copy as PDF/A-1b, plus a deliberate rule violation |
 | `ZCL_PDF_DEMO_COMPLEX` | order confirmation: letterhead, address window, info grid, grouped item table with subtotals over several pages, totals box, bar chart, two column terms, rotated watermark, signatures |
 
 ## Usage
@@ -246,6 +247,9 @@ lo_pdf->add_page(
 | `set_hex_streams( iv_active )` | Write images and fonts as ASCII hex |
 | `set_compression( iv_active )` | FlateDecode for content, fonts and ToUnicode maps |
 | `set_subset_fonts( iv_active )` | Embed only the used glyphs, on by default |
+| `set_pdfa( iv_icc, iv_title, iv_author )` | Produce PDF/A-1b |
+| `check_pdfa( )` | Reason why the document is not PDF/A, empty when it is |
+| `render_pdfa( )` | Render, refusing documents that break the PDF/A rules |
 | `text_field( )`, `checkbox( )`, `radio_button( )`, `dropdown( )` | Interactive form fields |
 | `set_flatten_form( iv_active )` | Draw fields as static boxes |
 | `get_field_count( )` | Number of interactive fields |
@@ -272,6 +276,42 @@ lo_pdf->add_page(
 | `D` | Draw outline only (default) |
 | `F` | Fill only |
 | `DF` or `FD` | Draw outline and fill |
+
+## PDF/A
+
+```abap
+lo_pdf->register_font( iv_name = 'ArchiveSans' iv_data = lv_ttf ).
+lo_pdf->set_font( iv_name = 'ArchiveSans' iv_size = 9 ).   " before the first add_page( )
+lo_pdf->set_pdfa(
+  iv_icc    = lv_srgb_profile
+  iv_title  = 'Invoice 90001234'
+  iv_author = 'My Company' ).
+lo_pdf->add_page( ).
+...
+DATA(lv_pdf) = lo_pdf->render_pdfa( ).
+```
+
+`set_pdfa( )` writes the XMP metadata with the conformance level, an Info dictionary that matches
+it, the output intent with the ICC profile, and a document id in the trailer. `render_pdfa( )`
+refuses to produce a document that breaks the rules, `check_pdfa( )` returns the reason as text.
+
+The rules that the library enforces or takes care of:
+
+| PDF/A-1b rule | How it is handled |
+|---------------|-------------------|
+| every font embedded | refused when a Base-14 font is used, so register a TrueType font |
+| no interactive widgets without appearances | `set_pdfa( )` flattens the form automatically |
+| XMP metadata with pdfaid part and conformance | written, and kept consistent with the Info dictionary |
+| output intent with an ICC profile | written, the profile is passed in by the caller |
+| document id in the trailer | written |
+| PDF 1.4 | the library always writes 1.4 |
+
+Note that the current font of the document is stated on every new page, so the embedded font has to
+be selected with `set_font( )` before the first `add_page( )`, otherwise Helvetica ends up in the
+document and `render_pdfa( )` refuses it.
+
+`tools/pdfa_check.py` runs the structural checks that are cheap to verify. It is not a certified
+validator, use veraPDF for a formal statement.
 
 ## Compression
 

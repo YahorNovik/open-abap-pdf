@@ -11,6 +11,10 @@ CLASS ltcl_ttf DEFINITION FOR TESTING RISK LEVEL HARMLESS DURATION SHORT.
     METHODS subset_structure FOR TESTING RAISING cx_static_check.
     METHODS subset_keeps_glyph_ids FOR TESTING RAISING cx_static_check.
     METHODS subset_switch FOR TESTING RAISING cx_static_check.
+    METHODS pdfa_structures FOR TESTING RAISING cx_static_check.
+    METHODS pdfa_requires_embedded_font FOR TESTING RAISING cx_static_check.
+    METHODS pdfa_flattens_fields FOR TESTING RAISING cx_static_check.
+    METHODS page_count_with_embedded_font FOR TESTING RAISING cx_static_check.
 ENDCLASS.
 
 CLASS ltcl_ttf IMPLEMENTATION.
@@ -22,7 +26,7 @@ CLASS ltcl_ttf IMPLEMENTATION.
 
     cl_abap_unit_assert=>assert_equals( act = ls_info-name exp = 'TestFont' ).
     cl_abap_unit_assert=>assert_equals( act = ls_info-units exp = 1000 ).
-    cl_abap_unit_assert=>assert_equals( act = ls_info-num_glyphs exp = 3 ).
+    cl_abap_unit_assert=>assert_equals( act = ls_info-num_glyphs exp = 5 ).
     cl_abap_unit_assert=>assert_equals( act = ls_info-ascent exp = 800 ).
     cl_abap_unit_assert=>assert_equals( act = ls_info-descent exp = -200 ).
     cl_abap_unit_assert=>assert_equals( act = ls_info-y_max exp = 700 ).
@@ -118,7 +122,94 @@ CLASS ltcl_ttf IMPLEMENTATION.
 
     " Glyph indices instead of a literal string, and the width of glyph 1
     cl_abap_unit_assert=>assert_char_cp( act = lv_pdf exp = '*<0001> Tj*' ).
-    cl_abap_unit_assert=>assert_char_cp( act = lv_pdf exp = '*/W [1 [600]*' ).
+    cl_abap_unit_assert=>assert_char_cp( act = lv_pdf exp = '*1 [600]*' ).
+  ENDMETHOD.
+
+  METHOD pdfa_structures.
+    DATA(lo_pdf) = zcl_open_abap_pdf=>create( ).
+    lo_pdf->set_hex_streams( ).
+    lo_pdf->register_font( iv_name = 'ArchFont' iv_data = zcl_pdf_test_font=>ttf( ) ).
+    lo_pdf->set_pdfa(
+      iv_icc    = zcl_pdf_test_icc=>srgb( )
+      iv_title  = 'Invoice 4711'
+      iv_author = 'Nova' ).
+    lo_pdf->set_font( iv_name = 'ArchFont' iv_size = 10 ).
+    lo_pdf->add_page( ).
+    lo_pdf->text( iv_x = 50 iv_y = 50 iv_text = 'A' ).
+
+    cl_abap_unit_assert=>assert_initial( lo_pdf->check_pdfa( ) ).
+
+    DATA(lv_pdf) = lo_pdf->render( ).
+
+    cl_abap_unit_assert=>assert_char_cp( act = lv_pdf exp = '*/OutputIntents [*' ).
+    cl_abap_unit_assert=>assert_char_cp( act = lv_pdf exp = '*/S /GTS_PDFA1*' ).
+    cl_abap_unit_assert=>assert_char_cp( act = lv_pdf exp = '*/DestOutputProfile*' ).
+    cl_abap_unit_assert=>assert_char_cp( act = lv_pdf exp = '*/Type /Metadata /Subtype /XML*' ).
+    cl_abap_unit_assert=>assert_char_cp( act = lv_pdf exp = '*<pdfaid:part>1</pdfaid:part>*' ).
+    cl_abap_unit_assert=>assert_char_cp( act = lv_pdf exp = '*<pdfaid:conformance>B*' ).
+    cl_abap_unit_assert=>assert_char_cp( act = lv_pdf exp = '*/Title (Invoice 4711)*' ).
+    cl_abap_unit_assert=>assert_char_cp( act = lv_pdf exp = '*/ID [<*' ).
+    cl_abap_unit_assert=>assert_char_cp( act = lv_pdf exp = '*/N 3 /Alternate /DeviceRGB*' ).
+  ENDMETHOD.
+
+  METHOD pdfa_requires_embedded_font.
+    DATA(lo_pdf) = zcl_open_abap_pdf=>create( ).
+    lo_pdf->set_pdfa( iv_icc = zcl_pdf_test_icc=>srgb( ) ).
+    lo_pdf->add_page( ).
+    lo_pdf->cell( iv_text = 'written with Helvetica' ).
+
+    cl_abap_unit_assert=>assert_char_cp(
+      act = lo_pdf->check_pdfa( )
+      exp = '*Helvetica is not embedded*' ).
+
+    TRY.
+        lo_pdf->render_pdfa( ).
+        cl_abap_unit_assert=>fail( 'a font that is not embedded must be refused' ).
+      CATCH zcx_open_abap_pdf.
+        RETURN.
+    ENDTRY.
+  ENDMETHOD.
+
+  METHOD pdfa_flattens_fields.
+    DATA(lo_pdf) = zcl_open_abap_pdf=>create( ).
+    lo_pdf->set_hex_streams( ).
+    lo_pdf->register_font( iv_name = 'FlatFont' iv_data = zcl_pdf_test_font=>ttf( ) ).
+    lo_pdf->set_pdfa( iv_icc = zcl_pdf_test_icc=>srgb( ) ).
+    lo_pdf->set_font( iv_name = 'FlatFont' iv_size = 10 ).
+    lo_pdf->add_page( ).
+    lo_pdf->text_field( iv_name = 'NAME' iv_x = 10 iv_y = 10 iv_width = 100 iv_value = 'A' ).
+
+    cl_abap_unit_assert=>assert_equals(
+      act = lo_pdf->get_field_count( )
+      exp = 0
+      msg = 'set_pdfa flattens the form, widgets are not allowed' ).
+
+    DATA(lv_pdf) = lo_pdf->render( ).
+    cl_abap_unit_assert=>assert_false( xsdbool( lv_pdf CS '/AcroForm' ) ).
+    cl_abap_unit_assert=>assert_false( xsdbool( lv_pdf CS '/NeedAppearances' ) ).
+  ENDMETHOD.
+
+  METHOD page_count_with_embedded_font.
+    DATA(lo_pdf) = zcl_open_abap_pdf=>create( ).
+    lo_pdf->set_hex_streams( ).
+    lo_pdf->register_font( iv_name = 'NbFont' iv_data = zcl_pdf_test_font=>ttf( ) ).
+    lo_pdf->set_font( iv_name = 'NbFont' iv_size = 10 ).
+    lo_pdf->add_page( ).
+    lo_pdf->add_page( ).
+    lo_pdf->text( iv_x = 10 iv_y = 10 iv_text = '{nb}' ).
+
+    DATA(lv_pdf) = lo_pdf->render( ).
+
+    " Digit 2 is glyph 4 in the test font, and the alias must be gone
+    cl_abap_unit_assert=>assert_char_cp(
+      act = lv_pdf
+      exp = '*<0004> Tj*' ).
+    " The alias must not be shown any more. Only look at show operators, because
+    " the hex encoded font file contains long runs of zeros as well.
+    cl_abap_unit_assert=>assert_false(
+      act = xsdbool( lv_pdf CS |<{ zcl_open_abap_pdf_font=>glyph_hex(
+                                    iv_name = 'NbFont' iv_text = '{nb}' ) }> Tj| )
+      msg = 'the glyph encoded page count alias has to be replaced too' ).
   ENDMETHOD.
 
   METHOD subset_structure.

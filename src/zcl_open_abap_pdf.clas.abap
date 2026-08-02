@@ -222,6 +222,27 @@ CLASS zcl_open_abap_pdf DEFINITION PUBLIC.
       IMPORTING iv_active     TYPE abap_bool DEFAULT abap_true
       RETURNING VALUE(ro_pdf) TYPE REF TO zcl_open_abap_pdf.
 
+    "! Produce a PDF/A-1b document. This changes several rules:
+    "! every font has to be an embedded TrueType font, interactive form fields are
+    "! not allowed and are therefore flattened, and an ICC profile is required for
+    "! the output intent. Render with render_pdfa( ) so the rules are checked.
+    "! @parameter iv_icc | sRGB ICC profile, in a real system read from SMW0 or a table
+    METHODS set_pdfa
+      IMPORTING iv_icc        TYPE xstring
+                iv_title      TYPE string DEFAULT ''
+                iv_author     TYPE string DEFAULT ''
+      RETURNING VALUE(ro_pdf) TYPE REF TO zcl_open_abap_pdf.
+
+    "! Describe why the document does not fulfil the PDF/A rules, empty when it does
+    METHODS check_pdfa
+      RETURNING VALUE(rv_problem) TYPE string.
+
+    "! Render as PDF/A, refusing documents that break the rules
+    "! @raising zcx_open_abap_pdf | PDF/A rule violated
+    METHODS render_pdfa
+      RETURNING VALUE(rv_pdf) TYPE xstring
+      RAISING   zcx_open_abap_pdf.
+
     "! Embed only the glyphs that the document uses. On by default, because a full
     "! font adds its complete file size to every document. Switch it off to embed
     "! the original font file.
@@ -438,6 +459,11 @@ CLASS zcl_open_abap_pdf DEFINITION PUBLIC.
     DATA mv_hex_images TYPE abap_bool.
     DATA mv_compress TYPE abap_bool.
     DATA mv_subset TYPE abap_bool.
+    DATA mv_pdfa TYPE abap_bool.
+    DATA mv_icc TYPE xstring.
+    DATA mv_title TYPE string.
+    DATA mv_author TYPE string.
+    DATA mv_info_id TYPE i.
     DATA mv_flatten TYPE abap_bool.
     DATA mt_fields TYPE ty_fields.
 
@@ -455,6 +481,27 @@ CLASS zcl_open_abap_pdf DEFINITION PUBLIC.
       IMPORTING iv_dict      TYPE string DEFAULT '<<'
                 iv_data      TYPE xstring
       RETURNING VALUE(rv_id) TYPE i.
+
+    "! Stream of binary data, as ASCII hex, compressed or raw, depending on the settings
+    METHODS add_binary_object
+      IMPORTING iv_dict      TYPE string DEFAULT '<<'
+                iv_data      TYPE xstring
+      RETURNING VALUE(rv_id) TYPE i.
+
+    METHODS resolve_page_count.
+
+    METHODS build_pdfa_objects
+      RETURNING VALUE(rv_intent_id) TYPE i.
+
+    METHODS build_metadata
+      RETURNING VALUE(rv_meta_id) TYPE i.
+
+    METHODS timestamp
+      EXPORTING ev_pdf_date TYPE string
+                ev_xmp_date TYPE string.
+
+    METHODS document_id
+      RETURNING VALUE(rv_id) TYPE string.
 
     METHODS escape_string
       IMPORTING iv_text           TYPE string
@@ -671,6 +718,130 @@ CLASS zcl_open_abap_pdf IMPLEMENTATION.
   METHOD set_subset_fonts.
     mv_subset = iv_active.
     ro_pdf = me.
+  ENDMETHOD.
+
+  METHOD set_pdfa.
+    mv_pdfa = abap_true.
+    mv_icc = iv_icc.
+    mv_title = iv_title.
+    mv_author = iv_author.
+
+    " Widgets without appearance streams are not allowed, so draw the values instead
+    mv_flatten = abap_true.
+
+    ro_pdf = me.
+  ENDMETHOD.
+
+  METHOD check_pdfa.
+    DATA ls_font TYPE ty_font.
+
+    IF mv_icc IS INITIAL.
+      rv_problem = 'PDF/A needs an ICC profile for the output intent'.
+      RETURN.
+    ENDIF.
+
+    LOOP AT mt_fonts INTO ls_font WHERE is_ttf = abap_false.
+      rv_problem = |PDF/A needs embedded fonts, { ls_font-name } is not embedded. | &&
+                   |Use register_font( ) and select the font with set_font( ) before add_page( ), | &&
+                   |because a new page states the current font|.
+      RETURN.
+    ENDLOOP.
+
+    IF mt_fields IS NOT INITIAL.
+      rv_problem = 'PDF/A does not allow interactive form fields without appearance streams'.
+    ENDIF.
+  ENDMETHOD.
+
+  METHOD render_pdfa.
+    IF mv_pdfa = abap_false.
+      zcx_open_abap_pdf=>raise( 'call set_pdfa( ) before render_pdfa( )' ).
+    ENDIF.
+
+    " The fonts are only known once the content has been written
+    DATA(lv_problem) = check_pdfa( ).
+    IF lv_problem IS NOT INITIAL.
+      zcx_open_abap_pdf=>raise( lv_problem ).
+    ENDIF.
+
+    rv_pdf = render_binary( ).
+  ENDMETHOD.
+
+  METHOD build_pdfa_objects.
+    DATA lv_icc_dict TYPE string.
+
+    lv_icc_dict = |<< /N 3 /Alternate /DeviceRGB|.
+    DATA(lv_icc_id) = add_binary_object( iv_dict = lv_icc_dict iv_data = mv_icc ).
+
+    rv_intent_id = add_object(
+      |<< /Type /OutputIntent /S /GTS_PDFA1 | &&
+      |/OutputConditionIdentifier (sRGB IEC61966-2.1) /Info (sRGB IEC61966-2.1) | &&
+      |/DestOutputProfile { lv_icc_id } 0 R >>| ).
+  ENDMETHOD.
+
+  METHOD timestamp.
+    " PDF wants D:YYYYMMDDHHMMSS, XMP wants YYYY-MM-DDTHH:MM:SS
+    DATA(lv_date) = |{ sy-datum }|.
+    DATA(lv_time) = |{ sy-uzeit }|.
+
+    ev_pdf_date = |D:{ lv_date }{ lv_time }Z|.
+    ev_xmp_date = |{ lv_date(4) }-{ lv_date+4(2) }-{ lv_date+6(2) }T| &&
+                  |{ lv_time(2) }:{ lv_time+2(2) }:{ lv_time+4(2) }Z|.
+  ENDMETHOD.
+
+  METHOD build_metadata.
+    timestamp(
+      IMPORTING ev_pdf_date = DATA(lv_pdf_date)
+                ev_xmp_date = DATA(lv_xmp_date) ).
+
+    DATA(lv_title) = mv_title.
+    IF lv_title IS INITIAL.
+      lv_title = 'Document'.
+    ENDIF.
+
+    " Info dictionary and XMP have to say the same thing
+    mv_info_id = add_object(
+      |<< /Title ({ zcl_open_abap_pdf_font=>escape( lv_title ) }) | &&
+      |/Author ({ zcl_open_abap_pdf_font=>escape( mv_author ) }) | &&
+      |/Producer (open-abap-pdf) /Creator (open-abap-pdf) | &&
+      |/CreationDate ({ lv_pdf_date }) /ModDate ({ lv_pdf_date }) >>| ).
+
+    DATA(lv_xmp) =
+      |<?xpacket begin="" id="W5M0MpCehiHzreSzNTczkc9d"?>\n| &&
+      |<x:xmpmeta xmlns:x="adobe:ns:meta/">\n| &&
+      | <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">\n| &&
+      |  <rdf:Description rdf:about="" xmlns:dc="http://purl.org/dc/elements/1.1/">\n| &&
+      |   <dc:title><rdf:Alt><rdf:li xml:lang="x-default">{ lv_title }</rdf:li></rdf:Alt></dc:title>\n| &&
+      |   <dc:creator><rdf:Seq><rdf:li>{ mv_author }</rdf:li></rdf:Seq></dc:creator>\n| &&
+      |  </rdf:Description>\n| &&
+      |  <rdf:Description rdf:about="" xmlns:xmp="http://ns.adobe.com/xap/1.0/">\n| &&
+      |   <xmp:CreatorTool>open-abap-pdf</xmp:CreatorTool>\n| &&
+      |   <xmp:CreateDate>{ lv_xmp_date }</xmp:CreateDate>\n| &&
+      |   <xmp:ModifyDate>{ lv_xmp_date }</xmp:ModifyDate>\n| &&
+      |  </rdf:Description>\n| &&
+      |  <rdf:Description rdf:about="" xmlns:pdf="http://ns.adobe.com/pdf/1.3/">\n| &&
+      |   <pdf:Producer>open-abap-pdf</pdf:Producer>\n| &&
+      |  </rdf:Description>\n| &&
+      |  <rdf:Description rdf:about="" xmlns:pdfaid="http://www.aiim.org/pdfa/ns/id/">\n| &&
+      |   <pdfaid:part>1</pdfaid:part>\n| &&
+      |   <pdfaid:conformance>B</pdfaid:conformance>\n| &&
+      |  </rdf:Description>\n| &&
+      | </rdf:RDF>\n</x:xmpmeta>\n<?xpacket end="w"?>|.
+
+    " The metadata stream stays uncompressed so that a validator can read it directly
+    rv_meta_id = add_stream_object(
+      iv_dict = '<< /Type /Metadata /Subtype /XML'
+      iv_data = cl_abap_codepage=>convert_to( lv_xmp ) ).
+  ENDMETHOD.
+
+  METHOD add_binary_object.
+    IF mv_hex_images = abap_true.
+      rv_id = add_stream_object(
+        iv_dict = |{ iv_dict } /Filter /ASCIIHexDecode|
+        iv_data = cl_abap_codepage=>convert_to( |{ iv_data }>| ) ).
+      RETURN.
+    ENDIF.
+
+    rv_id = add_flate_object( iv_dict = iv_dict iv_data = iv_data ).
   ENDMETHOD.
 
   METHOD add_flate_object.
@@ -1072,6 +1243,9 @@ CLASS zcl_open_abap_pdf IMPLEMENTATION.
     CLEAR mt_objects.
     mv_next_obj_id = 1.
 
+    " Has to run before the fonts are written, because the page number may add glyphs
+    resolve_page_count( ).
+
     " Interactive fields need Helvetica for the text and ZapfDingbats for the check marks
     IF mt_fields IS NOT INITIAL.
       ensure_font( 'Helvetica' ).
@@ -1101,9 +1275,6 @@ CLASS zcl_open_abap_pdf IMPLEMENTATION.
     LOOP AT mt_pages INTO ls_page.
       lv_page_tabix = sy-tabix.
       lv_stream = ls_page-content.
-      IF mv_nb_alias IS NOT INITIAL.
-        REPLACE ALL OCCURRENCES OF mv_nb_alias IN lv_stream WITH |{ lines( mt_pages ) }|.
-      ENDIF.
 
       ls_page-content_id = add_flate_object( iv_data = cl_abap_codepage=>convert_to( lv_stream ) ).
       MODIFY mt_pages FROM ls_page INDEX lv_page_tabix.
@@ -1153,8 +1324,18 @@ CLASS zcl_open_abap_pdf IMPLEMENTATION.
       iv_id      = lv_pages_id
       iv_content = |<< /Type /Pages /Kids [{ lv_page_ids }] /Count { lines( mt_pages ) } >>| ).
 
+    " PDF/A additions: output intent with the ICC profile and the XMP metadata
+    IF mv_pdfa = abap_true.
+      DATA(lv_intent_id) = build_pdfa_objects( ).
+      DATA(lv_meta_id) = build_metadata( ).
+    ENDIF.
+
     " Add catalog, with the interactive form when there are fields
     lv_catalog = |<< /Type /Catalog /Pages { lv_pages_id } 0 R|.
+    IF mv_pdfa = abap_true.
+      lv_catalog = |{ lv_catalog } /OutputIntents [{ lv_intent_id } 0 R] | &&
+                   |/Metadata { lv_meta_id } 0 R|.
+    ENDIF.
     IF lv_field_ids IS NOT INITIAL.
       READ TABLE mt_fonts INTO ls_font WITH KEY name = 'Helvetica'.
       DATA(lv_helv_id) = ls_font-obj_id.
@@ -1504,13 +1685,7 @@ CLASS zcl_open_abap_pdf IMPLEMENTATION.
 
     DATA(lv_font_dict) = |<< /Length1 { xstrlen( lv_font_data ) }|.
 
-    IF mv_hex_images = abap_true.
-      lv_font_dict = |{ lv_font_dict } /Filter /ASCIIHexDecode|.
-      lv_font_data = cl_abap_codepage=>convert_to( |{ lv_font_data }>| ).
-      lv_file_id = add_stream_object( iv_dict = lv_font_dict iv_data = lv_font_data ).
-    ELSE.
-      lv_file_id = add_flate_object( iv_dict = lv_font_dict iv_data = lv_font_data ).
-    ENDIF.
+    lv_file_id = add_binary_object( iv_dict = lv_font_dict iv_data = lv_font_data ).
 
     DATA(lv_descriptor_id) = add_object(
       |<< /Type /FontDescriptor /FontName /{ lv_prefix }{ ls_info-name } /Flags 32 | &&
@@ -1537,6 +1712,41 @@ CLASS zcl_open_abap_pdf IMPLEMENTATION.
       |<< /Type /Font /Subtype /Type0 /BaseFont /{ lv_prefix }{ ls_info-name } | &&
       |/Encoding /Identity-H /DescendantFonts [{ lv_cid_id } 0 R] | &&
       |/ToUnicode { lv_cmap_id } 0 R >>| ).
+  ENDMETHOD.
+
+  METHOD resolve_page_count.
+    DATA ls_font TYPE ty_font.
+    FIELD-SYMBOLS <ls_page> TYPE ty_page.
+
+    IF mv_nb_alias IS INITIAL.
+      RETURN.
+    ENDIF.
+
+    DATA(lv_count) = |{ lines( mt_pages ) }|.
+
+    LOOP AT mt_pages ASSIGNING <ls_page>.
+      REPLACE ALL OCCURRENCES OF mv_nb_alias IN <ls_page>-content WITH lv_count.
+
+      " An embedded font writes glyph indices, so the encoded alias is replaced as well
+      LOOP AT mt_fonts INTO ls_font WHERE is_ttf = abap_true.
+        REPLACE ALL OCCURRENCES OF
+          zcl_open_abap_pdf_font=>glyph_hex( iv_name = ls_font-name iv_text = mv_nb_alias )
+          IN <ls_page>-content
+          WITH zcl_open_abap_pdf_font=>glyph_hex( iv_name = ls_font-name iv_text = lv_count ).
+      ENDLOOP.
+    ENDLOOP.
+  ENDMETHOD.
+
+  METHOD document_id.
+    " Deterministic, derived from the content size and the creation time
+    DATA(lv_seed) = |{ sy-datum }{ sy-uzeit }{ lines( mt_pages ) }{ lines( mt_objects ) }|.
+
+    rv_id = ''.
+    WHILE strlen( rv_id ) < 32.
+      rv_id = |{ rv_id }{ lv_seed }|.
+    ENDWHILE.
+    rv_id = rv_id(32).
+    TRANSLATE rv_id USING 'ABCDEFGHIJ0123456789'.
   ENDMETHOD.
 
   METHOD build_images.
@@ -1643,7 +1853,16 @@ CLASS zcl_open_abap_pdf IMPLEMENTATION.
       lo_writer->add_string( |{ lv_offset_str } 00000 n \n| ).
     ENDLOOP.
 
-    lo_writer->add_string( |trailer\n<< /Size { lv_obj_count } /Root { lv_catalog_id } 0 R >>\nstartxref\n{ lv_startxref }\n%%EOF| ).
+    DATA(lv_trailer) = |<< /Size { lv_obj_count } /Root { lv_catalog_id } 0 R|.
+    IF mv_info_id > 0.
+      lv_trailer = |{ lv_trailer } /Info { mv_info_id } 0 R|.
+    ENDIF.
+    IF mv_pdfa = abap_true.
+      DATA(lv_doc_id) = document_id( ).
+      lv_trailer = |{ lv_trailer } /ID [<{ lv_doc_id }> <{ lv_doc_id }>]|.
+    ENDIF.
+
+    lo_writer->add_string( |trailer\n{ lv_trailer } >>\nstartxref\n{ lv_startxref }\n%%EOF| ).
 
     rv_pdf = lo_writer->get( ).
   ENDMETHOD.
