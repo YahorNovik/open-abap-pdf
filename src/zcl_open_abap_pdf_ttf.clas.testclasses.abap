@@ -8,6 +8,9 @@ CLASS ltcl_ttf DEFINITION FOR TESTING RISK LEVEL HARMLESS DURATION SHORT.
     METHODS glyph_hex FOR TESTING RAISING cx_static_check.
     METHODS embed_in_document FOR TESTING RAISING cx_static_check.
     METHODS non_winansi_text FOR TESTING RAISING cx_static_check.
+    METHODS subset_structure FOR TESTING RAISING cx_static_check.
+    METHODS subset_keeps_glyph_ids FOR TESTING RAISING cx_static_check.
+    METHODS subset_switch FOR TESTING RAISING cx_static_check.
 ENDCLASS.
 
 CLASS ltcl_ttf IMPLEMENTATION.
@@ -116,6 +119,87 @@ CLASS ltcl_ttf IMPLEMENTATION.
     " Glyph indices instead of a literal string, and the width of glyph 1
     cl_abap_unit_assert=>assert_char_cp( act = lv_pdf exp = '*<0001> Tj*' ).
     cl_abap_unit_assert=>assert_char_cp( act = lv_pdf exp = '*/W [1 [600]*' ).
+  ENDMETHOD.
+
+  METHOD subset_structure.
+    DATA(ls_info) = zcl_open_abap_pdf_ttf=>parse( zcl_pdf_test_font=>ttf( ) ).
+
+    DATA(lv_subset) = zcl_open_abap_pdf_ttf=>subset(
+      is_info = ls_info
+      it_gids = VALUE #( ( 1 ) ) ).
+
+    cl_abap_unit_assert=>assert_equals(
+      act = lv_subset(4)
+      exp = CONV xstring( '00010000' )
+      msg = 'a TrueType font starts with version 1.0' ).
+
+    cl_abap_unit_assert=>assert_equals(
+      act = lv_subset+4(2)
+      exp = CONV xstring( '0006' )
+      msg = 'glyf, head, hhea, hmtx, loca and maxp' ).
+
+    cl_abap_unit_assert=>assert_true(
+      act = xsdbool( xstrlen( lv_subset ) < xstrlen( ls_info-data ) )
+      msg = 'the subset has to be smaller than the original' ).
+  ENDMETHOD.
+
+  METHOD subset_keeps_glyph_ids.
+    DATA(ls_info) = zcl_open_abap_pdf_ttf=>parse( zcl_pdf_test_font=>ttf( ) ).
+
+    " Glyph 2 alone, so the font needs two glyph slots plus the empty glyph 0
+    DATA(lv_subset) = zcl_open_abap_pdf_ttf=>subset(
+      is_info = ls_info
+      it_gids = VALUE #( ( 2 ) ) ).
+
+    DATA(ls_subset_info) = ls_info.
+    ls_subset_info-data = lv_subset.
+
+    " Read the directory of the new font and check the number of glyphs in maxp
+    DATA(lv_tables) = zcl_open_abap_pdf_ttf=>uint( iv_data = lv_subset iv_offset = 4 iv_length = 2 ).
+    DATA(lv_offset) = 12.
+    DATA(lv_maxp) = 0.
+    DO lv_tables TIMES.
+      IF cl_abap_codepage=>convert_from( lv_subset+lv_offset(4) ) = 'maxp'.
+        lv_maxp = zcl_open_abap_pdf_ttf=>uint(
+          iv_data   = lv_subset
+          iv_offset = lv_offset + 8
+          iv_length = 4 ).
+      ENDIF.
+      lv_offset = lv_offset + 16.
+    ENDDO.
+
+    cl_abap_unit_assert=>assert_equals(
+      act = zcl_open_abap_pdf_ttf=>uint( iv_data = lv_subset iv_offset = lv_maxp + 4 iv_length = 2 )
+      exp = 3
+      msg = 'glyph indices are kept, so the count reaches the highest used glyph' ).
+  ENDMETHOD.
+
+  METHOD subset_switch.
+    DATA(lv_full_size) = xstrlen( zcl_pdf_test_font=>ttf( ) ).
+
+    DATA(lo_pdf) = zcl_open_abap_pdf=>create( ).
+    lo_pdf->set_hex_streams( ).
+    lo_pdf->set_subset_fonts( abap_false ).
+    lo_pdf->register_font( iv_name = 'FullFont' iv_data = zcl_pdf_test_font=>ttf( ) ).
+    lo_pdf->add_page( ).
+    lo_pdf->set_font( iv_name = 'FullFont' iv_size = 12 ).
+    lo_pdf->text( iv_x = 10 iv_y = 10 iv_text = 'A' ).
+
+    cl_abap_unit_assert=>assert_char_cp(
+      act = lo_pdf->render( )
+      exp = |*/Length1 { lv_full_size }*|
+      msg = 'without subsetting the whole font file is embedded' ).
+
+    DATA(lo_subset) = zcl_open_abap_pdf=>create( ).
+    lo_subset->set_hex_streams( ).
+    lo_subset->register_font( iv_name = 'SubFont' iv_data = zcl_pdf_test_font=>ttf( ) ).
+    lo_subset->add_page( ).
+    lo_subset->set_font( iv_name = 'SubFont' iv_size = 12 ).
+    lo_subset->text( iv_x = 10 iv_y = 10 iv_text = 'A' ).
+
+    DATA(lv_pdf) = lo_subset->render( ).
+    cl_abap_unit_assert=>assert_char_cp( act = lv_pdf exp = '*/BaseFont /SUBSET+SubFont*' ).
+    cl_abap_unit_assert=>assert_false( xsdbool( lv_pdf CS |/Length1 { lv_full_size }| ) ).
   ENDMETHOD.
 
   METHOD non_winansi_text.

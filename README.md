@@ -245,6 +245,7 @@ lo_pdf->add_page(
 | `register_font( iv_name, iv_data )` | Embed a TrueType font |
 | `set_hex_streams( iv_active )` | Write images and fonts as ASCII hex |
 | `set_compression( iv_active )` | FlateDecode for content, fonts and ToUnicode maps |
+| `set_subset_fonts( iv_active )` | Embed only the used glyphs, on by default |
 | `text_field( )`, `checkbox( )`, `radio_button( )`, `dropdown( )` | Interactive form fields |
 | `set_flatten_form( iv_active )` | Draw fields as static boxes |
 | `get_field_count( )` | Number of interactive fields |
@@ -310,10 +311,27 @@ glyphs that were actually used are described.
 In a real system the ttf comes from the MIME repository (SMW0), a table with a RAWSTRING field or
 the ICF, never from the file system, so the same code runs on ABAP Cloud.
 
+Only the used glyphs are embedded. Subsetting is on by default, `set_subset_fonts( abap_false )`
+embeds the original file. Glyph indices are kept as they are, which keeps composite glyphs valid
+without rewriting them, and the two sparse tables that this costs (`loca` and `hmtx`) compress to
+almost nothing:
+
+| DejaVuSans plus DejaVuSans-Bold, one page | Size |
+|-------------------------------------------|------|
+| full fonts, no compression | 1 477 KB |
+| full fonts, compressed | 753 KB |
+| subset, compressed | 25 KB |
+
+Composite glyphs, that is letters built from a base glyph and an accent such as s with acute, pull
+in the glyphs they reference.
+
 Limits of the current implementation:
 
-- the font file is embedded completely, there is no subsetting yet, so a 700 KB font makes the
-  document 700 KB larger, use a compact font or one subset outside ABAP
+- glyph indices are not renumbered, so `loca` and `hmtx` still have one entry per glyph up to the
+  highest used glyph, use compression to make that irrelevant
+- hinting tables (`cvt`, `fpgm`, `prep`) and the character map are dropped from the subset, which a
+  PDF with Identity-H encoding does not need
+- table checksums in the subset are written as zero
 - TrueType outlines only, OpenType with CFF outlines and WOFF are rejected
 - format 4 unicode cmap, which covers the Basic Multilingual Plane
 - no bidi or Arabic shaping, so right to left scripts are not laid out correctly

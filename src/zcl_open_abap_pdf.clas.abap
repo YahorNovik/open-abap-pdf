@@ -222,6 +222,13 @@ CLASS zcl_open_abap_pdf DEFINITION PUBLIC.
       IMPORTING iv_active     TYPE abap_bool DEFAULT abap_true
       RETURNING VALUE(ro_pdf) TYPE REF TO zcl_open_abap_pdf.
 
+    "! Embed only the glyphs that the document uses. On by default, because a full
+    "! font adds its complete file size to every document. Switch it off to embed
+    "! the original font file.
+    METHODS set_subset_fonts
+      IMPORTING iv_active     TYPE abap_bool DEFAULT abap_true
+      RETURNING VALUE(ro_pdf) TYPE REF TO zcl_open_abap_pdf.
+
     "! Compress page content, embedded fonts and the ToUnicode maps with FlateDecode.
     "! Typically shrinks a text heavy document to a fifth and an embedded font to a half.
     "! Images keep their own compression. Not compatible with set_hex_streams.
@@ -430,6 +437,7 @@ CLASS zcl_open_abap_pdf DEFINITION PUBLIC.
     DATA mv_in_layout TYPE abap_bool.
     DATA mv_hex_images TYPE abap_bool.
     DATA mv_compress TYPE abap_bool.
+    DATA mv_subset TYPE abap_bool.
     DATA mv_flatten TYPE abap_bool.
     DATA mt_fields TYPE ty_fields.
 
@@ -540,6 +548,7 @@ CLASS zcl_open_abap_pdf IMPLEMENTATION.
     ro_pdf->mv_auto_break = abap_true.
     ro_pdf->mv_break_margin = 15 * c_pt_per_mm.
     ro_pdf->mv_nb_alias = '{nb}'.
+    ro_pdf->mv_subset = abap_true.
   ENDMETHOD.
 
   METHOD add_page.
@@ -656,6 +665,11 @@ CLASS zcl_open_abap_pdf IMPLEMENTATION.
 
   METHOD set_compression.
     mv_compress = iv_active.
+    ro_pdf = me.
+  ENDMETHOD.
+
+  METHOD set_subset_fonts.
+    mv_subset = iv_active.
     ro_pdf = me.
   ENDMETHOD.
 
@@ -1463,14 +1477,32 @@ CLASS zcl_open_abap_pdf IMPLEMENTATION.
   ENDMETHOD.
 
   METHOD add_truetype_font.
+    DATA lt_gids TYPE zcl_open_abap_pdf_ttf=>ty_gids.
+    DATA ls_glyph TYPE zcl_open_abap_pdf_font=>ty_glyph.
+    DATA lv_file_id TYPE i.
+    DATA lv_prefix TYPE string.
+
     DATA(ls_info) = zcl_open_abap_pdf_font=>ttf_info( iv_name ).
     DATA(lt_glyphs) = zcl_open_abap_pdf_font=>used_glyphs( iv_name ).
 
     DATA(lv_scale) = CONV f( 1000 ) / ls_info-units.
-
-    DATA(lv_font_dict) = |<< /Length1 { xstrlen( ls_info-data ) }|.
     DATA(lv_font_data) = ls_info-data.
-    DATA lv_file_id TYPE i.
+
+    IF mv_subset = abap_true.
+      LOOP AT lt_glyphs INTO ls_glyph.
+        INSERT ls_glyph-gid INTO TABLE lt_gids.
+      ENDLOOP.
+
+      TRY.
+          lv_font_data = zcl_open_abap_pdf_ttf=>subset( is_info = ls_info it_gids = lt_gids ).
+          lv_prefix = 'SUBSET+'.
+        CATCH zcx_open_abap_pdf.
+          " Fall back to the complete font file rather than losing the document
+          lv_font_data = ls_info-data.
+      ENDTRY.
+    ENDIF.
+
+    DATA(lv_font_dict) = |<< /Length1 { xstrlen( lv_font_data ) }|.
 
     IF mv_hex_images = abap_true.
       lv_font_dict = |{ lv_font_dict } /Filter /ASCIIHexDecode|.
@@ -1481,7 +1513,7 @@ CLASS zcl_open_abap_pdf IMPLEMENTATION.
     ENDIF.
 
     DATA(lv_descriptor_id) = add_object(
-      |<< /Type /FontDescriptor /FontName /{ ls_info-name } /Flags 32 | &&
+      |<< /Type /FontDescriptor /FontName /{ lv_prefix }{ ls_info-name } /Flags 32 | &&
       |/FontBBox [{ format_number( ls_info-x_min * lv_scale ) } | &&
       |{ format_number( ls_info-y_min * lv_scale ) } | &&
       |{ format_number( ls_info-x_max * lv_scale ) } | &&
@@ -1493,7 +1525,7 @@ CLASS zcl_open_abap_pdf IMPLEMENTATION.
       |/StemV 80 /FontFile2 { lv_file_id } 0 R >>| ).
 
     DATA(lv_cid_id) = add_object(
-      |<< /Type /Font /Subtype /CIDFontType2 /BaseFont /{ ls_info-name } | &&
+      |<< /Type /Font /Subtype /CIDFontType2 /BaseFont /{ lv_prefix }{ ls_info-name } | &&
       |/CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) /Supplement 0 >> | &&
       |/FontDescriptor { lv_descriptor_id } 0 R /DW 1000 | &&
       |/W [{ build_widths( lt_glyphs ) }] /CIDToGIDMap /Identity >>| ).
@@ -1502,7 +1534,7 @@ CLASS zcl_open_abap_pdf IMPLEMENTATION.
       iv_data = cl_abap_codepage=>convert_to( build_to_unicode( lt_glyphs ) ) ).
 
     rv_id = add_object(
-      |<< /Type /Font /Subtype /Type0 /BaseFont /{ ls_info-name } | &&
+      |<< /Type /Font /Subtype /Type0 /BaseFont /{ lv_prefix }{ ls_info-name } | &&
       |/Encoding /Identity-H /DescendantFonts [{ lv_cid_id } 0 R] | &&
       |/ToUnicode { lv_cmap_id } 0 R >>| ).
   ENDMETHOD.
