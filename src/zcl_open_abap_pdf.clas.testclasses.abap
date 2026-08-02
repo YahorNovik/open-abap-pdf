@@ -156,6 +156,82 @@ CLASS ltcl_form IMPLEMENTATION.
 
 ENDCLASS.
 
+CLASS ltcl_paint DEFINITION FOR TESTING RISK LEVEL HARMLESS DURATION SHORT.
+  PRIVATE SECTION.
+    METHODS filled_shape_states_its_colour FOR TESTING RAISING cx_static_check.
+    METHODS text_colour_after_a_fill FOR TESTING RAISING cx_static_check.
+    METHODS circle_is_round FOR TESTING RAISING cx_static_check.
+    METHODS justify_leaves_the_last_line FOR TESTING RAISING cx_static_check.
+ENDCLASS.
+
+CLASS ltcl_paint IMPLEMENTATION.
+
+  METHOD filled_shape_states_its_colour.
+    " A filled rectangle used to inherit whatever colour was painted last
+    DATA(lv_pdf) = zcl_open_abap_pdf=>create(
+      )->add_page(
+      )->set_fill_color( iv_r = 0 iv_g = 128 iv_b = 255
+      )->rect( iv_x = 10 iv_y = 10 iv_width = 50 iv_height = 20 iv_style = 'F'
+      )->render( ).
+
+    cl_abap_unit_assert=>assert_char_cp( act = lv_pdf exp = '*0 0.5 1 rg 10 *re f*' ).
+  ENDMETHOD.
+
+  METHOD text_colour_after_a_fill.
+    " and the text after it has to go back to the text colour
+    DATA(lv_pdf) = zcl_open_abap_pdf=>create(
+      )->add_page(
+      )->set_font( iv_name = 'Helvetica' iv_size = 10
+      )->set_text_color( iv_r = 0 iv_g = 0 iv_b = 0
+      )->set_fill_color( iv_r = 255 iv_g = 0 iv_b = 0
+      )->rect( iv_x = 10 iv_y = 10 iv_width = 50 iv_height = 20 iv_style = 'F'
+      )->text( iv_x = 10 iv_y = 50 iv_text = 'after'
+      )->render( ).
+
+    cl_abap_unit_assert=>assert_char_cp( act = lv_pdf exp = '*0 0 0 rg BT 10 * (after) Tj ET*' ).
+  ENDMETHOD.
+
+  METHOD circle_is_round.
+    " The Bezier handles have to keep their decimals, otherwise the four curves
+    " degenerate into the straight edges of a diamond
+    DATA(lv_pdf) = zcl_open_abap_pdf=>create(
+      )->add_page(
+      )->circle( iv_x = 100 iv_y = 100 iv_radius = 30
+      )->render( ).
+
+    " 30 * 0.55228 = 16.57, so the first handle sits at 100 + 16.57 from the centre
+    cl_abap_unit_assert=>assert_char_cp( act = lv_pdf exp = '*116.57*' ).
+    cl_abap_unit_assert=>assert_false(
+      act = xsdbool( lv_pdf CP '*130 742.89 m 130 743.89*' )
+      msg = 'the handle must not collapse to one point' ).
+  ENDMETHOD.
+
+  METHOD justify_leaves_the_last_line.
+    " The closing line of a justified block keeps its natural word gaps, which
+    " means it is drawn with Tj and not as a TJ array
+    DATA(lo_pdf) = zcl_open_abap_pdf=>create( ).
+    lo_pdf->add_page( ).
+    lo_pdf->set_font( iv_name = 'Helvetica' iv_size = 10 ).
+    lo_pdf->multi_cell(
+      iv_width = 200
+      iv_align = zcl_open_abap_pdf=>c_align_justify
+      iv_text  = `Amounts shown as debit increase the balance you owe and amounts shown ` &&
+                 `as credit reduce it, so the last line here ends early.` ).
+
+    DATA(lv_pdf) = lo_pdf->render( ).
+
+    cl_abap_unit_assert=>assert_char_cp(
+      act = lv_pdf
+      exp = '*] TJ ET*'
+      msg = 'the full lines are stretched' ).
+    cl_abap_unit_assert=>assert_char_cp(
+      act = lv_pdf
+      exp = '*(early.) Tj ET*'
+      msg = 'the last line is not stretched' ).
+  ENDMETHOD.
+
+ENDCLASS.
+
 CLASS ltcl_pdf_test DEFINITION FOR TESTING RISK LEVEL HARMLESS DURATION SHORT.
   PRIVATE SECTION.
     METHODS test_create FOR TESTING RAISING cx_static_check.

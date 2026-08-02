@@ -77,6 +77,7 @@ Demo classes in `test/`:
 | `ZCL_PDF_DEMO_PDFA` | archive copy as PDF/A-1b, plus a deliberate rule violation |
 | `ZCL_PDF_DEMO_CODES` | Code 128 and QR codes, including a payment QR and a label |
 | `ZCL_PDF_DEMO_HYBRID` | hybrid invoice as PDF/A-3 with factur-x.xml attached, and a form round trip |
+| `ZCL_PDF_DEMO_SHOWCASE` | everything at once: archival statement of account, see below |
 | `ZCL_PDF_DEMO_COMPLEX` | order confirmation: letterhead, address window, info grid, grouped item table with subtotals over several pages, totals box, bar chart, two column terms, rotated watermark, signatures |
 
 ## Usage
@@ -333,6 +334,39 @@ document and `render_pdfa( )` refuses it.
 
 `tools/pdfa_check.py` runs the structural checks that are cheap to verify. It is not a certified
 validator, use veraPDF for a formal statement.
+
+## The showcase document
+
+`ZCL_PDF_DEMO_SHOWCASE` is the reference for what the library can do in one document. It builds a
+statement of account that is at the same time an archive copy and a machine readable record:
+
+| Page | Content |
+|------|---------|
+| 1 | letterhead with an embedded JPEG logo, title, address window, key and value grid, justified introduction, QR code to the portal, Code 128 of the statement number, and the start of the posting table |
+| 2 | the table continued with its repeating header, wrapped cells and a group that is kept with its rows, then the balance box, the debit and credit chart, two column justified notes and the signature lines |
+
+Every feature in it is one call:
+
+```abap
+lo_pdf->register_font( iv_name = 'ShowcaseSans' iv_data = lv_ttf ).      " PDF/A needs it embedded
+lo_pdf->set_pdfa( iv_icc = lv_icc iv_title = lv_title iv_part = 3 ).     " part 3 allows the XML
+lo_pdf->attach_file( iv_name = 'statement.xml' iv_data = lv_xml ).       " the machine readable copy
+lo_pdf->set_compression( ).                                             " a fifth of the size
+lo_pdf->set_auto_page_break( iv_margin = 68 ).                          " keep clear of the footer
+lo_pdf->set_layout( NEW zcl_pdf_demo_showcase( ) ).                     " header, footer, watermark
+lo_pdf->set_font( iv_name = 'ShowcaseSans' iv_size = 9 ).               " before the first page
+lo_pdf->add_page( ).
+```
+
+Render it with the fonts of your choice:
+
+```
+node test/render.mjs ZCL_PDF_DEMO_SHOWCASE run_base64 showcase.pdf DejaVuSans.ttf DejaVuSans-Bold.ttf
+```
+
+The result is a two page PDF/A-3b of about 37 kB that states `%PDF-1.7`, carries both font subsets,
+an sRGB output intent, `statement.xml` in `/EmbeddedFiles`, and whose QR code and barcode decode
+with an ordinary scanner.
 
 ## Barcodes and QR codes
 

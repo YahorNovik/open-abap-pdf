@@ -732,7 +732,9 @@ CLASS zcl_open_abap_pdf IMPLEMENTATION.
     DATA(lv_modules) = zcl_open_abap_pdf_barcode=>code128( iv_text ).
     DATA(lv_offset) = 0.
 
-    append_to_page( mv_text_color ).
+    " The bars are dark modules, so they take the text colour, not the fill colour
+    DATA(lv_saved_fill) = mv_fill_color.
+    mv_fill_color = mv_text_color.
     WHILE lv_offset < strlen( lv_modules ).
       IF lv_modules+lv_offset(1) <> '1'.
         lv_offset = lv_offset + 1.
@@ -759,6 +761,8 @@ CLASS zcl_open_abap_pdf IMPLEMENTATION.
       lv_offset = lv_offset + lv_run.
     ENDWHILE.
 
+    mv_fill_color = lv_saved_fill.
+
     ro_pdf = me.
   ENDMETHOD.
 
@@ -777,7 +781,9 @@ CLASS zcl_open_abap_pdf IMPLEMENTATION.
     DATA(lv_origin_x) = iv_x + 4 * lv_step.
     DATA(lv_origin_y) = iv_y + 4 * lv_step.
 
-    append_to_page( mv_text_color ).
+    DATA(lv_saved_fill) = mv_fill_color.
+    mv_fill_color = mv_text_color.
+
     LOOP AT lt_rows INTO lv_row.
       DATA(lv_y) = lv_origin_y + ( sy-tabix - 1 ) * lv_step.
       DATA(lv_offset) = 0.
@@ -806,6 +812,8 @@ CLASS zcl_open_abap_pdf IMPLEMENTATION.
         lv_offset = lv_offset + 1.
       ENDWHILE.
     ENDLOOP.
+
+    mv_fill_color = lv_saved_fill.
 
     ro_pdf = me.
   ENDMETHOD.
@@ -1146,9 +1154,7 @@ CLASS zcl_open_abap_pdf IMPLEMENTATION.
 
   METHOD draw_cell_box.
     IF iv_fill = abap_true.
-      append_to_page( mv_fill_color ).
       rect( iv_x = iv_x iv_y = iv_y iv_width = iv_width iv_height = iv_height iv_style = 'F' ).
-      append_to_page( mv_text_color ).
     ENDIF.
 
     IF iv_border IS INITIAL.
@@ -1257,7 +1263,12 @@ CLASS zcl_open_abap_pdf IMPLEMENTATION.
       iv_text  = iv_text
       iv_width = lv_width - 2 * iv_padding ).
 
+    " sy-tabix does not survive the calls inside the loop, so the line is counted here
+    DATA(lv_total) = lines( lt_lines ).
+    DATA(lv_no) = 0.
+
     LOOP AT lt_lines INTO lv_line.
+      lv_no = lv_no + 1.
       IF check_page_break( lv_height ) = abap_true.
         lv_x = mv_margin_left.
       ENDIF.
@@ -1267,10 +1278,10 @@ CLASS zcl_open_abap_pdf IMPLEMENTATION.
       IF iv_border = '1' OR iv_border = 'LTRB'.
         " Keep the block outline continuous instead of boxing every line
         lv_border = 'LR'.
-        IF sy-tabix = 1.
+        IF lv_no = 1.
           lv_border = 'LRT'.
         ENDIF.
-        IF sy-tabix = lines( lt_lines ).
+        IF lv_no = lv_total.
           lv_border = |{ lv_border }B|.
         ENDIF.
       ENDIF.
@@ -1279,7 +1290,7 @@ CLASS zcl_open_abap_pdf IMPLEMENTATION.
       IF iv_align = c_align_justify.
         " The last line of a block keeps its natural word gaps
         lv_align = c_align_left.
-        IF sy-tabix < lines( lt_lines ).
+        IF lv_no < lv_total.
           DATA(lv_text_x) = mv_x + iv_padding.
           DATA(lv_text_y) = mv_y + ( lv_height + mv_current_font_size * '0.7' ) / 2.
 
@@ -1383,7 +1394,10 @@ CLASS zcl_open_abap_pdf IMPLEMENTATION.
 
   METHOD text.
     DATA(lv_y) = transform_y( iv_y ).
-    DATA(lv_content) = |BT { format_number( iv_x ) } { format_number( lv_y ) } Td | &&
+
+    " Glyphs are filled, so the text colour has to be stated, otherwise the text
+    " inherits the colour of the shape that was painted last
+    DATA(lv_content) = |{ mv_text_color } BT { format_number( iv_x ) } { format_number( lv_y ) } Td | &&
                        |{ show_operand( iv_text ) } Tj ET|.
     append_to_page( lv_content ).
 
@@ -1426,8 +1440,8 @@ CLASS zcl_open_abap_pdf IMPLEMENTATION.
       lv_array = |{ lv_array }{ show_operand( lv_word ) }|.
     ENDLOOP.
 
-    DATA(lv_content) = |BT { format_number( iv_x ) } { format_number( transform_y( iv_y ) ) } Td | &&
-                       |[{ lv_array }] TJ ET|.
+    DATA(lv_content) = |{ mv_text_color } BT { format_number( iv_x ) } | &&
+                       |{ format_number( transform_y( iv_y ) ) } Td [{ lv_array }] TJ ET|.
     append_to_page( lv_content ).
   ENDMETHOD.
 
@@ -1441,7 +1455,7 @@ CLASS zcl_open_abap_pdf IMPLEMENTATION.
     lv_cos = cos( lv_rad ).
 
     DATA(lv_y) = transform_y( iv_y ).
-    append_to_page( |q { format_number( lv_cos ) } { format_number( lv_sin ) } | &&
+    append_to_page( |q { mv_text_color } { format_number( lv_cos ) } { format_number( lv_sin ) } | &&
       |{ format_number( lv_sin * -1 ) } { format_number( lv_cos ) } | &&
       |{ format_number( iv_x ) } { format_number( lv_y ) } cm | &&
       |BT 0 0 Td { COND string(
@@ -1475,6 +1489,12 @@ CLASS zcl_open_abap_pdf IMPLEMENTATION.
         lv_op = 'S'.
     ENDCASE.
 
+    " A filled shape has to state its colour, otherwise it inherits whatever was
+    " painted last, which is why set_fill_color has to reach the page here
+    IF lv_op <> 'S'.
+      append_to_page( mv_fill_color ).
+    ENDIF.
+
     lv_content = |{ format_number( iv_x ) } { format_number( lv_y ) } { format_number( iv_width ) } { format_number( iv_height ) } re { lv_op }|.
     append_to_page( lv_content ).
 
@@ -1482,10 +1502,16 @@ CLASS zcl_open_abap_pdf IMPLEMENTATION.
   ENDMETHOD.
 
   METHOD circle.
-    DATA(lv_y) = transform_y( iv_y ).
-    DATA(lv_k) = iv_radius * '0.5523'.  " Bezier curve approximation
     DATA lv_op TYPE string.
     DATA lv_content TYPE string.
+
+    " Distance of the Bezier handles that turns four curves into a circle.
+    " The type has to be stated, an inline declaration loses the decimals here
+    " and the shape comes out as a diamond.
+    DATA lv_k TYPE f.
+
+    DATA(lv_y) = transform_y( iv_y ).
+    lv_k = iv_radius * '0.55228475'.
 
     CASE iv_style.
       WHEN 'F'.
@@ -1495,6 +1521,10 @@ CLASS zcl_open_abap_pdf IMPLEMENTATION.
       WHEN OTHERS.
         lv_op = 'S'.
     ENDCASE.
+
+    IF lv_op <> 'S'.
+      append_to_page( mv_fill_color ).
+    ENDIF.
 
     " Draw circle using 4 Bezier curves
     lv_content = |{ format_number( iv_x + iv_radius ) } { format_number( lv_y ) } m |.
@@ -2060,6 +2090,7 @@ CLASS zcl_open_abap_pdf IMPLEMENTATION.
     DATA lv_data TYPE xstring.
 
     LOOP AT mt_images INTO ls_image.
+      DATA(lv_image_tabix) = sy-tabix.
       lv_colorspace = ls_image-info-colorspace.
       lv_filter = ls_image-info-filter.
       lv_data = ls_image-info-data.
@@ -2097,7 +2128,7 @@ CLASS zcl_open_abap_pdf IMPLEMENTATION.
       ENDIF.
 
       ls_image-obj_id = add_stream_object( iv_dict = lv_dict iv_data = lv_data ).
-      MODIFY mt_images FROM ls_image INDEX sy-tabix.
+      MODIFY mt_images FROM ls_image INDEX lv_image_tabix.
 
       IF rv_xobjects IS NOT INITIAL.
         rv_xobjects = rv_xobjects && | |.
