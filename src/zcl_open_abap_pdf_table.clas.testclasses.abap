@@ -5,12 +5,83 @@ CLASS ltcl_table DEFINITION FOR TESTING RISK LEVEL HARMLESS DURATION SHORT.
     METHODS header_repeats_on_break FOR TESTING RAISING cx_static_check.
     METHODS row_grows_with_wrapped_text FOR TESTING RAISING cx_static_check.
     METHODS cursor_returns_to_left FOR TESTING RAISING cx_static_check.
+    METHODS span_row FOR TESTING RAISING cx_static_check.
+    METHODS keep_with_next FOR TESTING RAISING cx_static_check.
+    METHODS header_text_color FOR TESTING RAISING cx_static_check.
 
     METHODS given_pdf
       RETURNING VALUE(ro_pdf) TYPE REF TO zcl_open_abap_pdf.
 ENDCLASS.
 
 CLASS ltcl_table IMPLEMENTATION.
+
+  METHOD span_row.
+    DATA(lo_pdf) = given_pdf( ).
+
+    zcl_open_abap_pdf_table=>create( lo_pdf
+      )->add_column( iv_header = 'A' iv_width = 100
+      )->add_column( iv_header = 'B' iv_width = 100
+      )->add_span_row( iv_text = 'Group one'
+      )->add_row( VALUE #( ( '1' ) ( '2' ) )
+      )->render( ).
+
+    " One box over both columns, so 200 points wide
+    cl_abap_unit_assert=>assert_char_cp(
+      act = lo_pdf->render( )
+      exp = '*40 * 200 *re*' ).
+    cl_abap_unit_assert=>assert_char_cp( act = lo_pdf->render( ) exp = '*(Group one)*' ).
+  ENDMETHOD.
+
+  METHOD keep_with_next.
+    DATA(lo_pdf) = given_pdf( ).
+    DATA(lo_table) = zcl_open_abap_pdf_table=>create( lo_pdf ).
+    lo_table->set_line_height( 14 ).
+    lo_table->add_column( iv_header = 'Text' ).
+
+    " Fill the page so that the group header would land at the very bottom
+    DO 50 TIMES.
+      lo_table->add_row( VALUE #( ( |row { sy-index }| ) ) ).
+    ENDDO.
+    lo_table->add_span_row( iv_text = 'Group at the page end' ).
+    lo_table->add_row( VALUE #( ( 'first row of the group' ) ) ).
+    lo_table->render( ).
+
+    DATA(lv_pdf) = lo_pdf->render( ).
+    DATA(lv_header_page) = 0.
+    DATA(lv_row_page) = 0.
+
+    SPLIT lv_pdf AT 'stream' INTO TABLE DATA(lt_streams).
+    LOOP AT lt_streams INTO DATA(lv_stream).
+      IF lv_stream CS '(Group at the page end)'.
+        lv_header_page = sy-tabix.
+      ENDIF.
+      IF lv_stream CS '(first row of the group)'.
+        lv_row_page = sy-tabix.
+      ENDIF.
+    ENDLOOP.
+
+    cl_abap_unit_assert=>assert_equals(
+      act = lv_row_page
+      exp = lv_header_page
+      msg = 'a group header must stay on the page of its first row' ).
+  ENDMETHOD.
+
+  METHOD header_text_color.
+    DATA(lo_pdf) = given_pdf( ).
+
+    zcl_open_abap_pdf_table=>create( lo_pdf
+      )->set_header_style( iv_r = 0 iv_g = 51 iv_b = 102
+                           iv_text_r = 255 iv_text_g = 255 iv_text_b = 255
+      )->add_column( iv_header = 'Material'
+      )->add_row( VALUE #( ( 'M-1' ) )
+      )->render( ).
+
+    DATA(lv_pdf) = lo_pdf->render( ).
+
+    " White header text, black body text again afterwards
+    cl_abap_unit_assert=>assert_char_cp( act = lv_pdf exp = '*1 1 1 rg*' ).
+    cl_abap_unit_assert=>assert_char_cp( act = lv_pdf exp = '*0 0.2 0.4 rg*' ).
+  ENDMETHOD.
 
   METHOD given_pdf.
     ro_pdf = zcl_open_abap_pdf=>create( ).

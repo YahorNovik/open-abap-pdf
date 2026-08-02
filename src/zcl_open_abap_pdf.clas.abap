@@ -55,7 +55,8 @@ CLASS zcl_open_abap_pdf DEFINITION PUBLIC.
       c_a4_width      TYPE f VALUE '595.28',  " 210mm in points
       c_a4_height     TYPE f VALUE '841.89',  " 297mm in points
       c_letter_width  TYPE f VALUE '612',
-      c_letter_height TYPE f VALUE '792'.
+      c_letter_height TYPE f VALUE '792',
+      c_pi            TYPE f VALUE '3.14159265358979'.
 
     CONSTANTS:
       c_align_left   TYPE string VALUE 'L',
@@ -113,6 +114,15 @@ CLASS zcl_open_abap_pdf DEFINITION PUBLIC.
       IMPORTING iv_x          TYPE f
                 iv_y          TYPE f
                 iv_text       TYPE string
+      RETURNING VALUE(ro_pdf) TYPE REF TO zcl_open_abap_pdf.
+
+    "! Draw text rotated around its anchor point
+    "! @parameter iv_angle | Counter clockwise degrees, 90 writes bottom up
+    METHODS text_rotated
+      IMPORTING iv_x          TYPE f
+                iv_y          TYPE f
+                iv_text       TYPE string
+                iv_angle      TYPE f
       RETURNING VALUE(ro_pdf) TYPE REF TO zcl_open_abap_pdf.
 
     "! Draw a line from (x1, y1) to (x2, y2)
@@ -253,6 +263,7 @@ CLASS zcl_open_abap_pdf DEFINITION PUBLIC.
                 iv_fill       TYPE abap_bool DEFAULT abap_false
                 iv_ln         TYPE abap_bool DEFAULT abap_true
                 iv_padding    TYPE f DEFAULT 2
+                iv_truncate   TYPE abap_bool DEFAULT abap_false
       RETURNING VALUE(ro_pdf) TYPE REF TO zcl_open_abap_pdf.
 
     "! Write a wrapped text block, breaking pages when needed
@@ -715,8 +726,17 @@ CLASS zcl_open_abap_pdf IMPLEMENTATION.
       iv_border = iv_border
       iv_fill   = iv_fill ).
 
-    IF iv_text IS NOT INITIAL.
-      DATA(lv_text_width) = get_text_width( iv_text ).
+    DATA(lv_text) = iv_text.
+    IF iv_truncate = abap_true AND lv_text IS NOT INITIAL.
+      lv_text = zcl_open_abap_pdf_font=>truncate(
+        iv_font  = mv_current_font
+        iv_size  = mv_current_font_size
+        iv_text  = lv_text
+        iv_width = lv_width - 2 * iv_padding ).
+    ENDIF.
+
+    IF lv_text IS NOT INITIAL.
+      DATA(lv_text_width) = get_text_width( lv_text ).
       CASE iv_align.
         WHEN c_align_center.
           lv_text_x = mv_x + ( lv_width - lv_text_width ) / 2.
@@ -730,7 +750,7 @@ CLASS zcl_open_abap_pdf IMPLEMENTATION.
       text(
         iv_x    = lv_text_x
         iv_y    = mv_y + ( lv_height + mv_current_font_size * '0.7' ) / 2
-        iv_text = iv_text ).
+        iv_text = lv_text ).
     ENDIF.
 
     IF iv_ln = abap_true.
@@ -853,6 +873,24 @@ CLASS zcl_open_abap_pdf IMPLEMENTATION.
     DATA(lv_escaped) = escape_string( iv_text ).
     DATA(lv_content) = |BT { format_number( iv_x ) } { format_number( lv_y ) } Td ({ lv_escaped }) Tj ET|.
     append_to_page( lv_content ).
+
+    ro_pdf = me.
+  ENDMETHOD.
+
+  METHOD text_rotated.
+    DATA lv_rad TYPE f.
+    DATA lv_sin TYPE f.
+    DATA lv_cos TYPE f.
+
+    lv_rad = iv_angle * c_pi / 180.
+    lv_sin = sin( lv_rad ).
+    lv_cos = cos( lv_rad ).
+
+    DATA(lv_y) = transform_y( iv_y ).
+    append_to_page( |q { format_number( lv_cos ) } { format_number( lv_sin ) } | &&
+      |{ format_number( lv_sin * -1 ) } { format_number( lv_cos ) } | &&
+      |{ format_number( iv_x ) } { format_number( lv_y ) } cm | &&
+      |BT 0 0 Td ({ escape_string( iv_text ) }) Tj ET Q| ).
 
     ro_pdf = me.
   ENDMETHOD.

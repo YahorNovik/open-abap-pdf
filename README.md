@@ -16,7 +16,7 @@ Plan is to have the same code run on:
 - Text with the 12 Base-14 text fonts, real AFM metrics, WinAnsi encoding for umlauts and the Euro sign
 - Text measuring, word wrap, left / center / right alignment
 - Layout engine: margins, cursor, `cell`, `multi_cell`, automatic page break, header and footer callbacks, total page count placeholder
-- Tables with column widths, wrapping cells, zebra shading, borders and a header row that repeats after a page break
+- Tables with column widths, wrapping cells, zebra shading, borders, a header row that repeats after a page break, full width group and subtotal rows, and keep with next so a group header never ends a page
 - Images: JPEG (DCTDecode) and PNG (FlateDecode), scaling, dpi, raw or ASCII hex streams
 - Interactive forms (AcroForm): text fields, check boxes, radio groups, drop downs, plus a flatten mode that draws the values as static text
 - Set text, draw, and fill colors (RGB)
@@ -64,6 +64,8 @@ Demo classes in `test/`:
 | `ZCL_PDF_DEMO_TABLE` | delivery note with a long table |
 | `ZCL_PDF_DEMO_IMAGE` | JPEG and PNG placement |
 | `ZCL_PDF_DEMO_FORM` | fillable form and its flattened copy |
+| `ZCL_PDF_DEMO_INVOICE` | replica of a Polish VAT invoice, logo, VAT summary |
+| `ZCL_PDF_DEMO_COMPLEX` | order confirmation: letterhead, address window, info grid, grouped item table with subtotals over several pages, totals box, bar chart, two column terms, rotated watermark, signatures |
 
 ## Usage
 
@@ -218,11 +220,13 @@ lo_pdf->add_page(
 | `set_fill_color( iv_r, iv_g, iv_b )` | Sets fill color |
 | `set_line_width( iv_width )` | Sets line width |
 | `text( iv_x, iv_y, iv_text )` | Draws text at position |
+| `text_rotated( iv_x, iv_y, iv_text, iv_angle )` | Rotated text, for watermarks and vertical labels |
 | `line( iv_x1, iv_y1, iv_x2, iv_y2 )` | Draws a line |
 | `rect( iv_x, iv_y, iv_width, iv_height, iv_style )` | Draws a rectangle |
 | `circle( iv_x, iv_y, iv_radius, iv_style )` | Draws a circle |
 | `cell( iv_text, iv_width, iv_height, iv_align, iv_border, iv_fill, iv_ln )` | Single line text box at the cursor |
 | `multi_cell( iv_text, iv_width, iv_height, iv_align, iv_border )` | Wrapped text block, breaks pages |
+| `cell( ... iv_truncate = abap_true )` | Shortens the text with an ellipsis instead of overflowing |
 | `set_margins( iv_left, iv_top, iv_right, iv_bottom )` | Page margins |
 | `set_auto_page_break( iv_active, iv_margin )` | Automatic page break |
 | `set_layout( io_layout )` | Header and footer callbacks |

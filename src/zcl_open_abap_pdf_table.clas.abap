@@ -15,6 +15,13 @@ CLASS zcl_open_abap_pdf_table DEFINITION PUBLIC FINAL CREATE PRIVATE.
       BEGIN OF ty_row,
         cells TYPE ty_cells,
         bold  TYPE abap_bool,
+        span  TYPE abap_bool,
+        align TYPE string,
+        fill  TYPE abap_bool,
+        r     TYPE i,
+        g     TYPE i,
+        b     TYPE i,
+        keep  TYPE abap_bool,
       END OF ty_row,
       ty_rows TYPE STANDARD TABLE OF ty_row WITH DEFAULT KEY.
 
@@ -35,23 +42,45 @@ CLASS zcl_open_abap_pdf_table DEFINITION PUBLIC FINAL CREATE PRIVATE.
       RETURNING VALUE(ro_table) TYPE REF TO zcl_open_abap_pdf_table.
 
     "! Add a data row, cells are matched to the columns by position
+    "! @parameter iv_keep_with_next | Keep this row and the next one on the same page
     METHODS add_row
-      IMPORTING it_cells        TYPE ty_cells
-                iv_bold         TYPE abap_bool DEFAULT abap_false
-      RETURNING VALUE(ro_table) TYPE REF TO zcl_open_abap_pdf_table.
+      IMPORTING it_cells          TYPE ty_cells
+                iv_bold           TYPE abap_bool DEFAULT abap_false
+                iv_keep_with_next TYPE abap_bool DEFAULT abap_false
+      RETURNING VALUE(ro_table)   TYPE REF TO zcl_open_abap_pdf_table.
 
-    "! Font and background of the header row, which repeats after a page break
+    "! Add a row that spans all columns, for group headers and subtotals
+    METHODS add_span_row
+      IMPORTING iv_text           TYPE string
+                iv_align          TYPE string DEFAULT 'L'
+                iv_bold           TYPE abap_bool DEFAULT abap_true
+                iv_fill           TYPE abap_bool DEFAULT abap_true
+                iv_r              TYPE i DEFAULT 225
+                iv_g              TYPE i DEFAULT 232
+                iv_b              TYPE i DEFAULT 240
+                iv_keep_with_next TYPE abap_bool DEFAULT abap_true
+      RETURNING VALUE(ro_table)   TYPE REF TO zcl_open_abap_pdf_table.
+
+    "! Font, background and text color of the header row, which repeats after a page break
+    "! @parameter iv_r | Background red, use a light background for dark text
+    "! @parameter iv_text_r | Text red, set 255 255 255 for a dark background
     METHODS set_header_style
       IMPORTING iv_font         TYPE string DEFAULT 'Helvetica-Bold'
                 iv_size         TYPE f DEFAULT 0
                 iv_r            TYPE i DEFAULT 230
                 iv_g            TYPE i DEFAULT 235
                 iv_b            TYPE i DEFAULT 240
+                iv_text_r       TYPE i DEFAULT 0
+                iv_text_g       TYPE i DEFAULT 0
+                iv_text_b       TYPE i DEFAULT 0
       RETURNING VALUE(ro_table) TYPE REF TO zcl_open_abap_pdf_table.
 
     METHODS set_body_style
       IMPORTING iv_font         TYPE string DEFAULT 'Helvetica'
                 iv_size         TYPE f DEFAULT 0
+                iv_text_r       TYPE i DEFAULT 0
+                iv_text_g       TYPE i DEFAULT 0
+                iv_text_b       TYPE i DEFAULT 0
       RETURNING VALUE(ro_table) TYPE REF TO zcl_open_abap_pdf_table.
 
     "! Shade every second data row
@@ -88,8 +117,14 @@ CLASS zcl_open_abap_pdf_table DEFINITION PUBLIC FINAL CREATE PRIVATE.
     DATA mv_header_r TYPE i.
     DATA mv_header_g TYPE i.
     DATA mv_header_b TYPE i.
+    DATA mv_header_text_r TYPE i.
+    DATA mv_header_text_g TYPE i.
+    DATA mv_header_text_b TYPE i.
     DATA mv_body_font TYPE string.
     DATA mv_body_size TYPE f.
+    DATA mv_body_text_r TYPE i.
+    DATA mv_body_text_g TYPE i.
+    DATA mv_body_text_b TYPE i.
     DATA mv_zebra TYPE abap_bool.
     DATA mv_zebra_r TYPE i.
     DATA mv_zebra_g TYPE i.
@@ -108,9 +143,13 @@ CLASS zcl_open_abap_pdf_table DEFINITION PUBLIC FINAL CREATE PRIVATE.
                 iv_size   TYPE f
                 iv_fill   TYPE abap_bool
                 iv_header TYPE abap_bool DEFAULT abap_false
+                iv_align  TYPE string DEFAULT ''
                 iv_r      TYPE i DEFAULT 255
                 iv_g      TYPE i DEFAULT 255
-                iv_b      TYPE i DEFAULT 255.
+                iv_b      TYPE i DEFAULT 255
+                iv_text_r TYPE i DEFAULT 0
+                iv_text_g TYPE i DEFAULT 0
+                iv_text_b TYPE i DEFAULT 0.
 
     METHODS row_height
       IMPORTING it_cells         TYPE ty_cells
@@ -158,7 +197,22 @@ CLASS zcl_open_abap_pdf_table IMPLEMENTATION.
   METHOD add_row.
     APPEND VALUE ty_row(
       cells = it_cells
-      bold  = iv_bold ) TO mt_rows.
+      bold  = iv_bold
+      keep  = iv_keep_with_next ) TO mt_rows.
+    ro_table = me.
+  ENDMETHOD.
+
+  METHOD add_span_row.
+    APPEND VALUE ty_row(
+      cells = VALUE ty_cells( ( iv_text ) )
+      bold  = iv_bold
+      span  = abap_true
+      align = iv_align
+      fill  = iv_fill
+      r     = iv_r
+      g     = iv_g
+      b     = iv_b
+      keep  = iv_keep_with_next ) TO mt_rows.
     ro_table = me.
   ENDMETHOD.
 
@@ -168,12 +222,18 @@ CLASS zcl_open_abap_pdf_table IMPLEMENTATION.
     mv_header_r = iv_r.
     mv_header_g = iv_g.
     mv_header_b = iv_b.
+    mv_header_text_r = iv_text_r.
+    mv_header_text_g = iv_text_g.
+    mv_header_text_b = iv_text_b.
     ro_table = me.
   ENDMETHOD.
 
   METHOD set_body_style.
     mv_body_font = iv_font.
     mv_body_size = iv_size.
+    mv_body_text_r = iv_text_r.
+    mv_body_text_g = iv_text_g.
+    mv_body_text_b = iv_text_b.
     ro_table = me.
   ENDMETHOD.
 
@@ -274,6 +334,7 @@ CLASS zcl_open_abap_pdf_table IMPLEMENTATION.
     IF iv_fill = abap_true.
       mo_pdf->set_fill_color( iv_r = iv_r iv_g = iv_g iv_b = iv_b ).
     ENDIF.
+    mo_pdf->set_text_color( iv_r = iv_text_r iv_g = iv_text_g iv_b = iv_text_b ).
 
     LOOP AT it_widths INTO lv_width.
       lv_index = sy-tabix.
@@ -294,6 +355,9 @@ CLASS zcl_open_abap_pdf_table IMPLEMENTATION.
       DATA(lv_align) = ls_column-align.
       IF iv_header = abap_true.
         lv_align = ls_column-header_align.
+      ENDIF.
+      IF iv_align IS NOT INITIAL.
+        lv_align = iv_align.
       ENDIF.
 
       LOOP AT zcl_open_abap_pdf_font=>wrap(
@@ -317,6 +381,10 @@ CLASS zcl_open_abap_pdf_table IMPLEMENTATION.
     ENDLOOP.
 
     mo_pdf->set_xy( iv_x = lv_start_x iv_y = lv_y + lv_height ).
+    mo_pdf->set_text_color(
+      iv_r = mv_body_text_r
+      iv_g = mv_body_text_g
+      iv_b = mv_body_text_b ).
   ENDMETHOD.
 
   METHOD draw_header.
@@ -340,14 +408,26 @@ CLASS zcl_open_abap_pdf_table IMPLEMENTATION.
       iv_header = abap_true
       iv_r      = mv_header_r
       iv_g      = mv_header_g
-      iv_b      = mv_header_b ).
+      iv_b      = mv_header_b
+      iv_text_r = mv_header_text_r
+      iv_text_g = mv_header_text_g
+      iv_text_b = mv_header_text_b ).
   ENDMETHOD.
 
   METHOD render.
     DATA ls_row TYPE ty_row.
+    DATA ls_next TYPE ty_row.
     DATA lv_font TYPE string.
     DATA lv_fill TYPE abap_bool.
     DATA lv_row_no TYPE i.
+    DATA lv_needed TYPE f.
+    DATA lv_width TYPE f.
+    DATA lv_total TYPE f.
+    DATA lt_span TYPE ty_widths.
+    DATA lt_row_widths TYPE ty_widths.
+    DATA lv_r TYPE i.
+    DATA lv_g TYPE i.
+    DATA lv_b TYPE i.
 
     DATA(lt_widths) = resolved_widths( ).
     DATA(lv_left) = mo_pdf->get_x( ).
@@ -359,6 +439,11 @@ CLASS zcl_open_abap_pdf_table IMPLEMENTATION.
       mv_body_size = 11.
     ENDIF.
 
+    LOOP AT lt_widths INTO lv_width.
+      lv_total = lv_total + lv_width.
+    ENDLOOP.
+    APPEND lv_total TO lt_span.
+
     draw_header( lt_widths ).
 
     LOOP AT mt_rows INTO ls_row.
@@ -369,30 +454,62 @@ CLASS zcl_open_abap_pdf_table IMPLEMENTATION.
         lv_font = mv_header_font.
       ENDIF.
 
-      IF mo_pdf->check_page_break( row_height(
-           it_cells  = ls_row-cells
-           it_widths = lt_widths
-           iv_font   = lv_font
-           iv_size   = mv_body_size ) ) = abap_true.
+      lt_row_widths = lt_widths.
+      IF ls_row-span = abap_true.
+        lt_row_widths = lt_span.
+      ENDIF.
+
+      lv_needed = row_height(
+        it_cells  = ls_row-cells
+        it_widths = lt_row_widths
+        iv_font   = lv_font
+        iv_size   = mv_body_size ).
+
+      " A group header must not be the last row on a page
+      IF ls_row-keep = abap_true.
+        READ TABLE mt_rows INTO ls_next INDEX lv_row_no + 1.
+        IF sy-subrc = 0.
+          lv_needed = lv_needed + row_height(
+            it_cells  = ls_next-cells
+            it_widths = COND #( WHEN ls_next-span = abap_true THEN lt_span ELSE lt_widths )
+            iv_font   = mv_body_font
+            iv_size   = mv_body_size ).
+        ENDIF.
+      ENDIF.
+
+      IF mo_pdf->check_page_break( lv_needed ) = abap_true.
         mo_pdf->set_x( lv_left ).
         draw_header( lt_widths ).
       ENDIF.
 
       lv_fill = abap_false.
+      lv_r = mv_zebra_r.
+      lv_g = mv_zebra_g.
+      lv_b = mv_zebra_b.
       IF mv_zebra = abap_true AND lv_row_no MOD 2 = 0.
         lv_fill = abap_true.
+      ENDIF.
+      IF ls_row-span = abap_true.
+        lv_fill = ls_row-fill.
+        lv_r = ls_row-r.
+        lv_g = ls_row-g.
+        lv_b = ls_row-b.
       ENDIF.
 
       mo_pdf->set_x( lv_left ).
       draw_row(
         it_cells  = ls_row-cells
-        it_widths = lt_widths
+        it_widths = lt_row_widths
         iv_font   = lv_font
         iv_size   = mv_body_size
         iv_fill   = lv_fill
-        iv_r      = mv_zebra_r
-        iv_g      = mv_zebra_g
-        iv_b      = mv_zebra_b ).
+        iv_align  = ls_row-align
+        iv_r      = lv_r
+        iv_g      = lv_g
+        iv_b      = lv_b
+        iv_text_r = mv_body_text_r
+        iv_text_g = mv_body_text_g
+        iv_text_b = mv_body_text_b ).
     ENDLOOP.
 
     mo_pdf->set_x( lv_left ).

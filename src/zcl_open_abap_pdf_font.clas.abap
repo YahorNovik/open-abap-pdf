@@ -19,6 +19,15 @@ CLASS zcl_open_abap_pdf_font DEFINITION PUBLIC FINAL CREATE PRIVATE.
                 iv_width        TYPE f
       RETURNING VALUE(rt_lines) TYPE ty_lines.
 
+    "! Shorten a text so that it fits into iv_width, adding an ellipsis
+    CLASS-METHODS truncate
+      IMPORTING iv_font        TYPE string
+                iv_size        TYPE f
+                iv_text        TYPE string
+                iv_width       TYPE f
+                iv_ellipsis    TYPE string DEFAULT '...'
+      RETURNING VALUE(rv_text) TYPE string.
+
     "! Escape a text for a PDF literal string, non-ASCII as WinAnsi octal
     CLASS-METHODS escape
       IMPORTING iv_text           TYPE string
@@ -161,6 +170,26 @@ CLASS zcl_open_abap_pdf_font IMPLEMENTATION.
 
       APPEND lv_line TO rt_lines.
     ENDLOOP.
+  ENDMETHOD.
+
+  METHOD truncate.
+    DATA lv_length TYPE i.
+
+    rv_text = iv_text.
+    IF text_width( iv_font = iv_font iv_size = iv_size iv_text = rv_text ) <= iv_width.
+      RETURN.
+    ENDIF.
+
+    lv_length = strlen( iv_text ).
+    WHILE lv_length > 0.
+      lv_length = lv_length - 1.
+      rv_text = |{ iv_text(lv_length) }{ iv_ellipsis }|.
+      IF text_width( iv_font = iv_font iv_size = iv_size iv_text = rv_text ) <= iv_width.
+        RETURN.
+      ENDIF.
+    ENDWHILE.
+
+    rv_text = ''.
   ENDMETHOD.
 
   METHOD escape.
