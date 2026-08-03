@@ -174,7 +174,7 @@ CLASS ltcl_paint IMPLEMENTATION.
       )->rect( iv_x = 10 iv_y = 10 iv_width = 50 iv_height = 20 iv_style = 'F'
       )->render( ).
 
-    cl_abap_unit_assert=>assert_char_cp( act = lv_pdf exp = '*0 0.5 1 rg 10 *re f*' ).
+    cl_abap_unit_assert=>assert_char_cp( act = lv_pdf exp = '*0 0.502 1 rg 10 *re f*' ).
   ENDMETHOD.
 
   METHOD text_colour_after_a_fill.
@@ -199,8 +199,8 @@ CLASS ltcl_paint IMPLEMENTATION.
       )->circle( iv_x = 100 iv_y = 100 iv_radius = 30
       )->render( ).
 
-    " 30 * 0.55228 = 16.57, so the first handle sits at 100 + 16.57 from the centre
-    cl_abap_unit_assert=>assert_char_cp( act = lv_pdf exp = '*116.57*' ).
+    " 30 * 0.55228 = 16.569, so the first handle sits at 100 + 16.569 from the centre
+    cl_abap_unit_assert=>assert_char_cp( act = lv_pdf exp = '*116.569*' ).
     cl_abap_unit_assert=>assert_false(
       act = xsdbool( lv_pdf CP '*130 742.89 m 130 743.89*' )
       msg = 'the handle must not collapse to one point' ).

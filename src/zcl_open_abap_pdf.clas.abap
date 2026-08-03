@@ -154,6 +154,19 @@ CLASS zcl_open_abap_pdf DEFINITION PUBLIC.
                 iv_y2         TYPE f
       RETURNING VALUE(ro_pdf) TYPE REF TO zcl_open_abap_pdf.
 
+    "! Draw a line by shifting the origin to its start and stating the end point
+    "! relative to it, which is how print form generators write their rules.
+    "! A rasterizer can round the coordinates of a shifted origin differently, so
+    "! a redraw of such a document only matches pixel for pixel in this form.
+    "! @parameter iv_dx | Distance to the right of the start point
+    "! @parameter iv_dy | Distance below the start point
+    METHODS line_from
+      IMPORTING iv_x          TYPE f
+                iv_y          TYPE f
+                iv_dx         TYPE f
+                iv_dy         TYPE f
+      RETURNING VALUE(ro_pdf) TYPE REF TO zcl_open_abap_pdf.
+
     "! Draw a rectangle
     "! @parameter iv_style | D=Draw, F=Fill, DF=Both
     METHODS rect
@@ -1475,6 +1488,16 @@ CLASS zcl_open_abap_pdf IMPLEMENTATION.
     ro_pdf = me.
   ENDMETHOD.
 
+  METHOD line_from.
+    " q saves the state, cm shifts the origin, Q puts the state back, so the
+    " shift only applies to this one line
+    DATA(lv_content) = |q 1 0 0 1 { format_number( iv_x ) } { format_number( transform_y( iv_y ) ) } cm | &&
+                       |0 0 m { format_number( iv_dx ) } { format_number( iv_dy * -1 ) } l S Q|.
+    append_to_page( lv_content ).
+
+    ro_pdf = me.
+  ENDMETHOD.
+
   METHOD rect.
     DATA(lv_y) = transform_y( iv_y + iv_height ).
     DATA lv_op TYPE string.
@@ -2311,62 +2334,43 @@ CLASS zcl_open_abap_pdf IMPLEMENTATION.
   ENDMETHOD.
 
   METHOD format_number.
-    DATA lv_int TYPE i.
-    DATA lv_dec TYPE i.
     DATA lv_abs TYPE f.
-    DATA lv_str TYPE string.
-    DATA lv_dec_str TYPE string.
-    DATA lv_neg TYPE abap_bool.
-    DATA lv_fraction TYPE f.
-    DATA lv_temp TYPE f.
+    DATA lv_int TYPE i.
+    DATA lv_frac TYPE i.
+    DATA lv_dec TYPE string.
 
-    " Handle negative numbers
+    " Three decimals, which is what print form generators write, so a redraw can
+    " reproduce their coordinates exactly, and trailing zeros are dropped again
     IF iv_number < 0.
-      lv_neg = abap_true.
       lv_abs = iv_number * -1.
     ELSE.
-      lv_neg = abap_false.
       lv_abs = iv_number.
     ENDIF.
 
-    " Get integer part
     lv_int = floor( lv_abs ).
-
-    " Get decimal part (2 decimal places is enough for PDF)
-    lv_fraction = lv_abs - lv_int.
-    lv_temp = lv_fraction * 100.
-    lv_dec = round( val = lv_temp dec = 0 ).
-
-    " Handle rounding up to next integer
-    IF lv_dec >= 100.
+    lv_frac = round( val = ( lv_abs - lv_int ) * 1000 dec = 0 ).
+    IF lv_frac >= 1000.
       lv_int = lv_int + 1.
-      lv_dec = 0.
+      lv_frac = 0.
     ENDIF.
 
-    " Build result
-    IF lv_neg = abap_true.
-      lv_str = |-{ lv_int }|.
-    ELSE.
-      lv_str = |{ lv_int }|.
+    IF lv_frac > 0.
+      lv_dec = |{ lv_frac }|.
+      WHILE strlen( lv_dec ) < 3.
+        lv_dec = |0{ lv_dec }|.
+      ENDWHILE.
+      WHILE strlen( lv_dec ) > 1 AND substring( val = lv_dec off = strlen( lv_dec ) - 1 len = 1 ) = '0'.
+        lv_dec = substring( val = lv_dec len = strlen( lv_dec ) - 1 ).
+      ENDWHILE.
     ENDIF.
 
-    " Add decimals if non-zero
-    IF lv_dec > 0.
-      IF lv_dec < 10.
-        lv_dec_str = |0{ lv_dec }|.
-      ELSE.
-        lv_dec_str = |{ lv_dec }|.
-      ENDIF.
-      " Remove trailing zero
-      IF strlen( lv_dec_str ) = 2.
-        IF lv_dec_str+1(1) = '0'.
-          lv_dec_str = lv_dec_str(1).
-        ENDIF.
-      ENDIF.
-      lv_str = lv_str && '.' && lv_dec_str.
+    rv_string = |{ lv_int }|.
+    IF iv_number < 0 AND ( lv_int > 0 OR lv_frac > 0 ).
+      rv_string = |-{ rv_string }|.
     ENDIF.
-
-    rv_string = lv_str.
+    IF lv_frac > 0.
+      rv_string = |{ rv_string }.{ lv_dec }|.
+    ENDIF.
   ENDMETHOD.
 
   METHOD append_to_page.
