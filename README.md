@@ -337,6 +337,18 @@ document and `render_pdfa( )` refuses it.
 `tools/pdfa_check.py` runs the structural checks that are cheap to verify. It is not a certified
 validator, use veraPDF for a formal statement.
 
+## Using it in a real SAP system
+
+`integration/` holds the SAP only part: a preview handover, a pilot switch, and a standalone report
+that renders a purchase order and opens it in the viewer of the workstation without touching output
+determination. `src/` stays free of frontend and DDIC dependencies so it keeps running on ABAP Cloud
+and in the Node preview loop.
+
+Install with two abapGit repositories from the same URL, starting folder `/src/` for the library and
+`/integration/` for the SAP only objects, then run `ZSTPO_PDF_PREVIEW_DEMO`. See
+[integration/README.md](integration/README.md), which also documents how the renderer is injected
+into a classic Adobe Document Services print program.
+
 ## Redrawing an existing document
 
 `tools/pdf_to_abap.py` reads a document that only uses Helvetica, straight lines, rectangles and

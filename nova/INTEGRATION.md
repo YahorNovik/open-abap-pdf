@@ -75,20 +75,52 @@ ENDINTERFACE.
 | NAST / classic output types (ECC, VBELN based) | Yes | the output type calls a Z print program, that program calls the layout class |
 | Correspondence, dunning, payment advice frameworks | Partly | wherever the framework calls a Z form routine, the class can be called there; where it insists on a SAPscript or Smart Form name, it cannot |
 | Spool and physical printing | Limited | SAP spool is designed for its own page formats. Printing a generated PDF needs a PDF capable output device with a pass through device type, otherwise the practical answer is e-mail or download and let the client print |
-| e-invoicing (Peppol, KSeF, FatturaPA, ZUGFeRD) | Complementary only | the legal artifact is XML. This library produces the human readable copy. ZUGFeRD needs PDF/A-3 with an embedded XML, which is not supported yet |
+| e-invoicing (Peppol, KSeF, FatturaPA, ZUGFeRD) | Yes, as the readable half | the legal artifact is XML. `attach_file( )` with PDF/A-3 embeds it, which is what ZUGFeRD and Factur-X require |
+
+### Injecting into a classic ADS print program
+
+Measured on a real custom copy of `SAPFM06P`, a purchasing print program of about 6300 lines. All
+fourteen entry routines converge on one routine, and the document leaves it in a single variable,
+`os_formout-pdf` of type `fpformoutput`, filled by `CALL FUNCTION ls_function` where `ls_function`
+comes from `FP_FUNCTION_MODULE_NAME( tnapr-sform )`.
+
+| Channel | Reads `os_formout-pdf` | After filling it from this library |
+|---------|------------------------|-----------------------------------|
+| e-mail and fax, `nacha` 5 and 2 | yes, `cl_document_bcs` plus `cl_bcs` | works unchanged, BAdI hooks included |
+| archive, `tdarmod` 2 and 3 | yes, `ARCHIV_CREATE_OUTGOINGDOCUMENT` | works unchanged |
+| web preview, `ent_screen` = `W` | yes, `EXPORT ... TO MEMORY ID 'PDF_FILE'` | works unchanged |
+| screen preview, `ent_screen` = `X` | no, the FP framework opened the viewer | needs a display handover, see `integration/` |
+| print, `nacha` 1 | no, the spool request comes from the FP job | keep on ADS first |
+
+So three of the four channels need no change at all, because the program already treats the rendered
+document as a PDF in memory. The data does not have to be collected again either: the form interface
+is filled from `cl_purchase_order_output`, and a layout class can take the same structures.
 
 ## 5. Feature gaps that decide whether it fits
 
+Closed since the first assessment:
+
+| Was a gap | Now |
+|-----------|-----|
+| Only WinAnsi text | TrueType embedding, Type0 / Identity-H, subsetting, so Polish, Czech, Turkish, Cyrillic and Greek render |
+| No PDF/A | PDF/A-1b and PDF/A-3b with XMP, sRGB output intent and rule checks |
+| No stream compression | FlateDecode for content, fonts and ToUnicode maps, about a fifth of the size |
+| No barcodes or QR codes | Code 128 and a QR encoder, both verified by decoding the rendered raster |
+| No justified text | `c_align_justify` in `multi_cell( )` |
+| No rotation | `text_rotated( )` |
+| Cannot read a PDF | `zcl_open_abap_pdf_reader` reads form values and the page count, also from compressed object streams |
+| No ZUGFeRD or Factur-X | `attach_file( )` with PDF/A-3, the XML is named in the metadata |
+
+Still open:
+
 | Gap | Impact | Effort to close |
 |-----|--------|-----------------|
-| Only WinAnsi text (Base-14 fonts) | Polish, Czech, Hungarian, Turkish, Cyrillic, Greek, CJK, Hebrew, Arabic are rendered as `?` | TrueType embedding with Identity-H, medium to large, includes cmap parsing and widths |
-| No PDF/A | not usable where legally compliant archiving is required, no ZUGFeRD | XMP metadata, ICC profile, embedded fonts, medium, depends on font embedding |
+| No tagged PDF, no structure tree | no screen reader support, and PDF/A-1a and PDF/UA are out of reach. Documents produced by Adobe LiveCycle are tagged, so a redraw loses that layer | medium, marked content operators plus a structure tree and a parent tree |
 | No digital signature | no qualified signing inside ABAP | large, needs CMS and key handling |
-| Cannot read or fill an existing PDF | official authority forms that must be filled cannot be used as a template | large, needs a PDF parser |
-| No stream compression | files roughly 2 times larger than necessary | small, zlib wrapper around `cl_abap_gzip` |
-| No barcodes or QR codes | EPC payment QR, KSeF QR, shipping labels | medium, a QR encoder in ABAP |
-| No justified text, no hyphenation, no RTL | dense letter layouts look different from Word output | small to medium |
-| No rotation, clipping, dashes, gradients, transparency | watermarks and stamps need workarounds | small per feature |
+| Cannot fill an existing PDF template | an authority form that must be used as a template cannot be filled | large, needs a full parser |
+| No spool integration | a generated PDF does not create a spool request by itself, see section 4 | small to medium, and it needs a PDF capable output device |
+| No hyphenation, no RTL | dense letter layouts differ from Word output | medium |
+| No clipping, dashes, gradients, transparency | stamps and effects need workarounds | small per feature |
 | Layout is code, not a design tool | a key user cannot adapt the layout, a developer and a transport are needed | by design |
 | Performance | string based assembly, a 5000 row table costs memory and time | medium, streaming writer |
 

@@ -1,6 +1,6 @@
 ---
 name: abap-pdf-generation
-description: Learn when the user asks to generate a PDF or a printable form from ABAP (invoice, delivery note, purchase order, expense form, label sheet) or to extend the open-abap-pdf library. Covers the generate - preview - edit loop with visual feedback, the layout model (margins, cursor, cell, multi_cell, auto page break, header and footer), tables with repeating headers, JPEG and PNG images, interactive AcroForm fields and flattening, plus the ABAP pitfalls that break PDF output.
+description: Learn when the user asks to generate a PDF or a printable form from ABAP (invoice, delivery note, purchase order, expense form, label sheet), to replace Adobe Document Services or SmartForms in a print program, to reproduce an existing PDF, or to extend the open-abap-pdf library. Covers the generate - preview - edit loop with visual feedback, the layout model (margins, cursor, cell, multi_cell, auto page break, header and footer), tables with repeating headers, images, embedded TrueType fonts, barcodes and QR codes, PDF/A-1b and PDF/A-3 with attachments, reading a filled form, wiring into NAST output determination, and the ABAP pitfalls that break PDF output.
 ---
 
 ## Overview
@@ -19,8 +19,14 @@ Repository layout:
 | `src/zcl_open_abap_pdf_font.clas.abap` | text width, word wrap, PDF string escaping |
 | `src/zcl_open_abap_pdf_metrics.clas.abap` | generated Base-14 glyph widths, never edit by hand |
 | `src/zcl_open_abap_pdf_image.clas.abap` | JPEG and PNG parsing |
-| `src/zcl_open_abap_pdf_writer.clas.abap` | byte safe output buffer |
+| `src/zcl_open_abap_pdf_writer.clas.abap` | byte safe output buffer, FlateDecode |
+| `src/zcl_open_abap_pdf_ttf.clas.abap` | TrueType parsing, subsetting |
+| `src/zcl_open_abap_pdf_barcode.clas.abap` | Code 128 |
+| `src/zcl_open_abap_pdf_qr.clas.abap` | QR encoder, Reed-Solomon, masking |
+| `src/zcl_open_abap_pdf_reader.clas.abap` | read form values and the page count back out |
 | `preview.sh`, `tools/pdf_preview.py`, `tools/validate.py` | the preview loop |
+| `tools/pdf_to_abap.py` | turn an existing PDF into ABAP that redraws it |
+| `integration/` | SAP only: preview handover, pilot switch, standalone test report |
 
 ## Rules
 
@@ -28,8 +34,16 @@ Repository layout:
   are exact, but overlapping boxes and wrong coordinates are only visible in the raster.
 - The coordinate origin is the TOP LEFT corner and the unit is points (1/72 inch). `mm_to_pt( )`
   and `inch_to_pt( )` convert. A4 is 595.28 x 841.89.
-- ALWAYS use `render_binary( )` when the document contains images. `render( )` returns a string
-  and can only be used for pure text documents, or after `set_hex_images( )`.
+- ALWAYS use `render_binary( )` when the document contains images, an embedded font or compression.
+  `render( )` returns a string and is only for pure text documents, or after `set_hex_streams( )`.
+- ALWAYS look at the rendered raster before claiming a barcode works. The Code 128 check digit and
+  the QR error correction, mask and format bits are all silent failures - the symbol looks right and
+  a scanner rejects it. Decode your own output, for example with `zxingcpp`.
+- PDF/A requires every font to be embedded, so `set_font( )` with the registered TrueType font has
+  to happen BEFORE `add_page( )`, because a new page states the current font. Interactive fields are
+  flattened automatically, and an attachment needs `iv_part = 3`.
+- NEVER put text on a page after a filled shape without stating the text colour again. A fill
+  changes the non stroking colour, and `text( )` therefore restates it.
 - NEVER build text with trailing blanks in `'...'` literals - ABAP trims them, which glues words
   together after a wrap. Use backtick literals `` `text ` `` or string templates.
 - NEVER put an expression in `CONSTANTS ... VALUE` - a constant must be a single literal, and a
@@ -82,7 +96,19 @@ Repository layout:
 7. **Add unit tests** next to the feature: `src/*.clas.testclasses.abap` and run `npm test`
    (abaplint + ABAP unit + PDF validation).
 
-8. **Inspect a form** with PyMuPDF when interactive fields are involved:
+8. **Reproduce an existing document** when the user supplies a PDF that has to be matched. Extract
+   the geometry instead of measuring pixels:
+
+   ```bash
+   python3 tools/pdf_to_abap.py original.pdf test/zcl_copy.clas.abap zcl_copy
+   node test/render.mjs ZCL_COPY run_base64 copy.pdf
+   ```
+
+   Then diff the rasters page by page and only stop when the deltas are at the anti aliasing level.
+   Three details decide the match: coordinates with three decimals, `line_from( )` for rules that
+   the source draws with a shifted origin, and a palette PNG for an indexed image.
+
+9. **Inspect a form** with PyMuPDF when interactive fields are involved:
 
    ```python
    import fitz
