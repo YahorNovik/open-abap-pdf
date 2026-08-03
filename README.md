@@ -77,6 +77,7 @@ Demo classes in `test/`:
 | `ZCL_PDF_DEMO_PDFA` | archive copy as PDF/A-1b, plus a deliberate rule violation |
 | `ZCL_PDF_DEMO_CODES` | Code 128 and QR codes, including a payment QR and a label |
 | `ZCL_PDF_DEMO_HYBRID` | hybrid invoice as PDF/A-3 with factur-x.xml attached, and a form round trip |
+| `ZCL_PDF_DEMO_PO` | replica of an intercompany purchase order, absolute coordinates, wordmark drawn from rectangles |
 | `ZCL_PDF_DEMO_SHOWCASE` | everything at once: archival statement of account, see below |
 | `ZCL_PDF_DEMO_COMPLEX` | order confirmation: letterhead, address window, info grid, grouped item table with subtotals over several pages, totals box, bar chart, two column terms, rotated watermark, signatures |
 
