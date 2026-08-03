@@ -13,7 +13,9 @@ PARAMETERS p_ebeln TYPE ekko-ebeln OBLIGATORY DEFAULT '4500000001'.
 PARAMETERS p_read  TYPE abap_bool AS CHECKBOX DEFAULT abap_true.
 PARAMETERS p_show  RADIOBUTTON GROUP out DEFAULT 'X'.
 PARAMETERS p_save  RADIOBUTTON GROUP out.
+PARAMETERS p_spool RADIOBUTTON GROUP out.
 PARAMETERS p_file  TYPE string LOWER CASE DEFAULT 'C:\temp\po.pdf'.
+PARAMETERS p_dest  TYPE rspopname DEFAULT 'LOCL'.
 
 CLASS lcl_demo DEFINITION FINAL CREATE PRIVATE.
   PUBLIC SECTION.
@@ -67,12 +69,21 @@ CLASS lcl_demo IMPLEMENTATION.
     WRITE: / 'Document', gs_head-ebeln,
            / 'Size    ', lv_size, 'bytes'.
 
-    IF p_save = abap_true.
-      zcl_stpo_pdf_view=>download( iv_pdf = lv_pdf iv_path = p_file ).
-      WRITE: / 'Saved to', p_file.
-    ELSE.
-      zcl_stpo_pdf_view=>display( iv_pdf = lv_pdf iv_name = |PO_{ gs_head-ebeln }| ).
-    ENDIF.
+    CASE abap_true.
+      WHEN p_save.
+        zcl_stpo_pdf_view=>download( iv_pdf = lv_pdf iv_path = p_file ).
+        WRITE: / 'Saved to', p_file.
+
+      WHEN p_spool.
+        " The output device needs a device type of format PDF, otherwise the
+        " function raises wrong_devtype. Display the request in SP01 or SP02.
+        DATA(lv_spoolid) = zcl_stpo_pdf_spool=>create( iv_pdf  = lv_pdf
+                                                      iv_dest = p_dest ).
+        WRITE: / 'Spool request', lv_spoolid, 'on device', p_dest.
+
+      WHEN OTHERS.
+        zcl_stpo_pdf_view=>display( iv_pdf = lv_pdf iv_name = |PO_{ gs_head-ebeln }| ).
+    ENDCASE.
   ENDMETHOD.
 
 

@@ -8,6 +8,7 @@ and DDIC dependencies so that it keeps running on ABAP Cloud and in the Node pre
 |--------|---------|
 | `ZCL_STPO_PDF_VIEW` | hands a PDF that is in memory to the PDF viewer of the workstation |
 | `ZSTPO_PDF_PREVIEW_DEMO` | standalone report, renders a purchase order and previews it |
+| `ZCL_STPO_PDF_SPOOL` | creates a spool request from a PDF in memory, which is what the FP job used to do |
 | `ZCL_STPO_PDF_SWITCH` | decides per message whether this library or ADS renders |
 
 ## 1. Install
@@ -35,7 +36,8 @@ workstation. Nothing is printed, no spool request is created, no output type is 
 |-------|---------|
 | Purchasing document | the document to read |
 | Read the document from the database | off shows the layout with sample values, useful on an empty client |
-| Show in the viewer / Save to a file | preview, or write the file and inspect it |
+| Show in the viewer / Save to a file / Create a spool request | the three ways out |
+| Output device | only for the spool option, the device type has to be format PDF |
 
 What this proves in one run: the library activates and runs on the real kernel, the fonts and the
 layout are correct, and the preview handover works on your desktops.
@@ -54,7 +56,7 @@ that variable, so they need no change at all:
 | e-mail and fax, `nast-nacha` 5 and 2 | yes, `cl_document_bcs` and `cl_bcs` | works unchanged, including the four BAdI hooks |
 | archive, `nast-tdarmod` 2 and 3 | yes, `ARCHIV_CREATE_OUTGOINGDOCUMENT` | works unchanged |
 | web preview, `if_preview` = `W` | yes, `EXPORT lv_pdf_file ... TO MEMORY ID 'PDF_FILE'` | works unchanged |
-| print, `nast-nacha` 1 | no, the spool request comes from the FP job | keep on ADS in phase one |
+| print, `nast-nacha` 1 | no, the spool request comes from the FP job | `ZCL_STPO_PDF_SPOOL`, see below |
 
 The change is one block around the existing `CALL FUNCTION ls_function`:
 
@@ -100,7 +102,35 @@ There are fourteen entry routines in the program, `adobe_entry_neu`, `_absa`, `_
 `_lphe`, `_lpje`, `_lpma`, `_aufb`, `_lpfz` and three `entry_*_auto`, and all of them call
 `adobe_print_output`. One swap covers every output type.
 
-## 4. Two traps in that program
+## 4. The print channel
+
+The spool request no longer has to come from the FP job. `ADS_CREATE_PDF_SPOOLJOB` takes finished PDF
+bytes and creates a spool request from them, which restores paper output, SP01 and SP02, the export
+as PDF from the spool, and the display of the original from the document.
+
+```abap
+DATA(lv_spoolid) = zcl_stpo_pdf_spool=>create( iv_pdf  = os_formout-pdf
+                                               iv_dest = nast-ldest ).
+```
+
+Feed that id into the existing log message, where the program today reads the ids that
+`FP_JOB_CLOSE` returned:
+
+```abap
+READ TABLE e_result-spoolids INTO spoolid INDEX 1.   " today
+sy-msgv1 = spoolid.
+MESSAGE w320(me) WITH sy-msgv1 ...                   " keep this, just set spoolid yourself
+```
+
+The one requirement is an output device whose device type has format PDF, `TSP03D-PATYPE`. Without
+it the function raises `wrong_devtype`. `ZCL_STPO_PDF_SWITCH` therefore keeps print off until you set
+`c_allow_print`, and the example program in your system is `FP_TEST_SAVE_PDF_TO_SPOOL`.
+
+Confirm the parameter list against that program before you rely on it. The call above follows the
+documented interface, `dest`, `pages`, `pdf_data`, `spoolid`, and seven exceptions, but the interface
+was not verified against your release.
+
+## 5. Two traps in that program
 
 - There is a commented out copy of the whole routine of about 1100 lines further down. Patch the
   live one.
@@ -108,7 +138,7 @@ There are fourteen entry routines in the program, `adobe_entry_neu`, `_absa`, `_
   than thirty places, so the program also runs under the newer output control. Check which of your
   purchasing output types take which path before you switch anything on.
 
-## 5. Rollback
+## 6. Rollback
 
 `ZCL_STPO_PDF_SWITCH` answers `abap_false` for everything except the piloted application and output
 type, and never for print. Reverting means changing that method, or the customizing table it reads

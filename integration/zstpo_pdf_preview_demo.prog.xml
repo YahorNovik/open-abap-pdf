@@ -44,6 +44,18 @@
      <ENTRY>Show in the viewer</ENTRY>
      <LENGTH>18</LENGTH>
     </item>
+    <item>
+     <ID>S</ID>
+     <KEY>P_SPOOL</KEY>
+     <ENTRY>Create a spool request</ENTRY>
+     <LENGTH>22</LENGTH>
+    </item>
+    <item>
+     <ID>S</ID>
+     <KEY>P_DEST</KEY>
+     <ENTRY>Output device, device type PDF</ENTRY>
+     <LENGTH>29</LENGTH>
+    </item>
    </TPOOL>
   </asx:values>
  </asx:abap>

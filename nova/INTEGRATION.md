@@ -74,7 +74,7 @@ ENDINTERFACE.
 | Output Control for determination, own rendering | Yes | let Output Control determine recipients, channel and rules, then generate the PDF in your own code and send it with `cl_bcs` |
 | NAST / classic output types (ECC, VBELN based) | Yes | the output type calls a Z print program, that program calls the layout class |
 | Correspondence, dunning, payment advice frameworks | Partly | wherever the framework calls a Z form routine, the class can be called there; where it insists on a SAPscript or Smart Form name, it cannot |
-| Spool and physical printing | Limited | SAP spool is designed for its own page formats. Printing a generated PDF needs a PDF capable output device with a pass through device type, otherwise the practical answer is e-mail or download and let the client print |
+| Spool and physical printing | Yes | `ADS_CREATE_PDF_SPOOLJOB` creates a spool request from a PDF in memory, example program `FP_TEST_SAVE_PDF_TO_SPOOL`. The output device has to use a device type of format PDF. A system that already prints Adobe forms has that, because ADS output is PDF in the spool |
 | e-invoicing (Peppol, KSeF, FatturaPA, ZUGFeRD) | Yes, as the readable half | the legal artifact is XML. `attach_file( )` with PDF/A-3 embeds it, which is what ZUGFeRD and Factur-X require |
 
 ### Injecting into a classic ADS print program
@@ -118,7 +118,7 @@ Still open:
 | No tagged PDF, no structure tree | no screen reader support, and PDF/A-1a and PDF/UA are out of reach. Documents produced by Adobe LiveCycle are tagged, so a redraw loses that layer | medium, marked content operators plus a structure tree and a parent tree |
 | No digital signature | no qualified signing inside ABAP | large, needs CMS and key handling |
 | Cannot fill an existing PDF template | an authority form that must be used as a template cannot be filled | large, needs a full parser |
-| No spool integration | a generated PDF does not create a spool request by itself, see section 4 | small to medium, and it needs a PDF capable output device |
+| Spool needs one standard call | `ADS_CREATE_PDF_SPOOLJOB` takes the finished bytes and creates the spool request, so this is no longer a gap, but the output device has to use a device type of format PDF | done, see `integration/zcl_stpo_pdf_spool.clas.abap` |
 | No hyphenation, no RTL | dense letter layouts differ from Word output | medium |
 | No clipping, dashes, gradients, transparency | stamps and effects need workarounds | small per feature |
 | Layout is code, not a design tool | a key user cannot adapt the layout, a developer and a transport are needed | by design |

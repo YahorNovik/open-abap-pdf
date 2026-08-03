@@ -4,15 +4,16 @@ CLASS zcl_stpo_pdf_switch DEFINITION PUBLIC FINAL CREATE PRIVATE.
     "! by Adobe Document Services, so the change can be switched on for one
     "! output type in one company code and rolled back without a transport.
     "!
-    "! Phase one deliberately answers abap_false for print, because the spool
-    "! request is created by the FP job and not from the PDF in memory.
+    "! Print is off by default, not because the spool cannot be written any more
+    "! but because it needs an output device with a device type of format PDF.
+    "! Switch iv_allow_print on once that device exists, see ZCL_STPO_PDF_SPOOL.
     "!
     "! @parameter is_nast | The message that is being processed
     "! @parameter iv_preview | The ent_screen flag of the entry routine
     CLASS-METHODS use_own_renderer
-      IMPORTING is_nast          TYPE nast
-                iv_preview       TYPE c DEFAULT space
-      RETURNING VALUE(rv_own)    TYPE abap_bool.
+      IMPORTING is_nast       TYPE nast
+                iv_preview    TYPE c DEFAULT space
+      RETURNING VALUE(rv_own) TYPE abap_bool.
 
   PRIVATE SECTION.
     CONSTANTS c_medium_print TYPE nast-nacha VALUE '1'.
@@ -31,8 +32,12 @@ CLASS zcl_stpo_pdf_switch IMPLEMENTATION.
       RETURN.
     ENDIF.
 
-    " Print still goes through ADS, see the comment above
-    IF iv_preview IS INITIAL AND is_nast-nacha = c_medium_print.
+    " Print needs an output device of format PDF, see the comment above
+    CONSTANTS c_allow_print TYPE abap_bool VALUE abap_false.
+
+    IF iv_preview IS INITIAL
+       AND is_nast-nacha = c_medium_print
+       AND c_allow_print = abap_false.
       RETURN.
     ENDIF.
 
